@@ -1118,6 +1118,7 @@ opcode! {
         let mut sqe = sqe_zeroed();
         sqe.opcode = Self::CODE;
         assign_fd!(sqe.fd = fd);
+        sqe.ioprio = ioprio;
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
         sqe.ioprio = ioprio;
