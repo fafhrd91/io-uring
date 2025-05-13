@@ -1,6 +1,6 @@
 [package]
-name = "io-uring"
-version = "0.7.6"
+name = "ntex-io-uring"
+version = "0.7.7"
 authors = ["quininer <quininer@live.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -15,7 +15,6 @@ rust-version = "1.63"
 
 [workspace]
 exclude = []
-members = [ "io-uring-test", "io-uring-bench" ]
 
 [features]
 overwrite = [ "bindgen" ]

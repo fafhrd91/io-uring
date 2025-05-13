@@ -1068,6 +1068,7 @@ opcode! {
         buf: { *mut u8 },
         len: { u32 },
         ;;
+        ioprio: u16 = 0,
         flags: i32 = 0,
         buf_group: u16 = 0
     }
@@ -1075,11 +1076,12 @@ opcode! {
     pub const CODE = sys::IORING_OP_RECV;
 
     pub fn build(self) -> Entry {
-        let Recv { fd, buf, len, flags, buf_group } = self;
+        let Recv { fd, buf, len, ioprio, flags, buf_group } = self;
 
         let mut sqe = sqe_zeroed();
         sqe.opcode = Self::CODE;
         assign_fd!(sqe.fd = fd);
+        sqe.ioprio = ioprio;
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
         sqe.__bindgen_anon_3.msg_flags = flags as _;
