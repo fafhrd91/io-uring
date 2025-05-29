@@ -91,6 +91,70 @@ macro_rules! opcode {
             #[inline]
             pub fn build($self) -> $entry $build_block
         }
+    };
+    (
+        $( #[$outer:meta] )*
+        pub struct $name:ident {
+            $( #[$new_meta:meta] )*
+
+            $( $field:ident : { $( $tnt:tt )+ } ),*
+
+            $(,)?
+
+            ;;
+
+            $(
+                $( #[$opt_meta:meta] )*
+                $opt_field:ident : $opt_tname:ty = $default:expr
+            ),*
+
+            $(,)?
+        }
+
+        pub const CODE = $opcode:expr;
+
+        $( #[$build_meta:meta] )*
+        pub fn build($self:ident) -> $entry:ty $build_block:block
+
+        pub fn build_into($self2:ident, $sqe:ident: $sqeTy:ty) $build_block2:block
+    ) => {
+        $( #[$outer] )*
+        pub struct $name {
+            $( $field : opcode!(@type $( $tnt )*), )*
+            $( $opt_field : $opt_tname, )*
+        }
+
+        impl $name {
+            $( #[$new_meta] )*
+            #[inline]
+            pub fn new($( $field : $( $tnt )* ),*) -> Self {
+                $name {
+                    $( $field: $field.into(), )*
+                    $( $opt_field: $default, )*
+                }
+            }
+
+            /// The opcode of the operation. This can be passed to
+            /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
+            /// supported with the current kernel.
+            pub const CODE: u8 = $opcode as _;
+
+            $(
+                $( #[$opt_meta] )*
+                #[inline]
+                pub const fn $opt_field(mut self, $opt_field: $opt_tname) -> Self {
+                    self.$opt_field = $opt_field;
+                    self
+                }
+            )*
+
+            $( #[$build_meta] )*
+            #[inline]
+            pub fn build($self) -> $entry $build_block
+
+            #[inline]
+            pub fn build_into($self2, $sqe: $sqeTy) $build_block2
+        }
     }
 }
 
@@ -1059,6 +1123,20 @@ opcode! {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
         Entry(sqe)
     }
+
+    pub fn build_into(self, entry: &mut Entry) {
+        let Send { fd, buf, len, flags, dest_addr, dest_addr_len } = self;
+
+        let sqe = &mut entry.0;
+
+        sqe.opcode = Self::CODE;
+        assign_fd!(sqe.fd = fd);
+        sqe.__bindgen_anon_2.addr = buf as _;
+        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
+        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
+        sqe.len = len;
+        sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
 }
 
 opcode! {
@@ -1087,6 +1165,27 @@ opcode! {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
         sqe.__bindgen_anon_4.buf_group = buf_group;
         Entry(sqe)
+    }
+
+    pub fn build_into(self, entry: &mut Entry) {
+        let Recv { fd, buf, len, ioprio, flags, buf_group } = self;
+
+        let sqe = &mut entry.0;
+
+        assign_fd!(sqe.fd = fd);
+        sqe.opcode = Self::CODE;
+        sqe.ioprio = ioprio;
+        sqe.__bindgen_anon_2.addr = buf as _;
+        sqe.len = len;
+        sqe.__bindgen_anon_3.msg_flags = flags as _;
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+    }
+}
+
+impl Recv {
+    #[inline]
+    pub fn set_ioprio(&mut self, ioprio: u16) {
+        self.ioprio = ioprio;
     }
 }
 
@@ -1855,6 +1954,25 @@ opcode! {
         sqe.__bindgen_anon_1.addr2 = dest_addr as _;
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
         Entry(sqe)
+    }
+
+    pub fn build_into(self, entry: &mut Entry) {
+        let SendZc { fd, buf, len, buf_index, dest_addr, dest_addr_len, flags, zc_flags } = self;
+
+        let sqe = &mut entry.0;
+
+        assign_fd!(sqe.fd = fd);
+        sqe.opcode = Self::CODE;
+        sqe.__bindgen_anon_2.addr = buf as _;
+        sqe.len = len;
+        sqe.__bindgen_anon_3.msg_flags = flags as _;
+        sqe.ioprio = zc_flags;
+        if let Some(buf_index) = buf_index {
+            sqe.__bindgen_anon_4.buf_index = buf_index;
+            sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
+        }
+        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
+        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
     }
 }
 

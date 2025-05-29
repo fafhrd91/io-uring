@@ -273,6 +273,31 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     #[inline]
+    pub unsafe fn push_inline<F>(&mut self, f: F) -> Result<(), PushError>
+    where
+        F: FnOnce(&mut E),
+    {
+        if self.is_full() {
+            Err(PushError)
+        } else {
+            let entry = self
+                .queue
+                .sqes
+                .add((self.tail & self.queue.ring_mask) as usize);
+            f(&mut *entry);
+            self.tail = self.tail.wrapping_add(1);
+            Ok(())
+        }
+    }
+
+    /// Attempts to push an entry into the queue.
+    /// If the queue is full, an error is returned.
+    ///
+    /// # Safety
+    ///
+    /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
+    /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
+    #[inline]
     pub unsafe fn push(&mut self, entry: &E) -> Result<(), PushError> {
         if !self.is_full() {
             self.push_unchecked(entry);
@@ -366,6 +391,12 @@ impl Entry {
     pub fn personality(mut self, personality: u16) -> Entry {
         self.0.personality = personality;
         self
+    }
+}
+
+impl Default for Entry {
+    fn default() -> Self {
+        Self(unsafe { mem::zeroed() })
     }
 }
 
