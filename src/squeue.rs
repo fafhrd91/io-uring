@@ -1,5 +1,6 @@
 //! Submission Queue
 
+use std::cell::Cell;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
@@ -23,8 +24,8 @@ pub(crate) struct Inner<E: EntryMarker> {
 
 /// An io_uring instance's submission queue. This is used to send I/O requests to the kernel.
 pub struct SubmissionQueue<'a, E: EntryMarker = Entry> {
-    head: u32,
-    tail: u32,
+    head: Cell<u32>,
+    tail: Cell<u32>,
     queue: &'a Inner<E>,
 }
 
@@ -151,8 +152,8 @@ impl<E: EntryMarker> Inner<E> {
     #[inline]
     pub(crate) unsafe fn borrow_shared(&self) -> SubmissionQueue<'_, E> {
         SubmissionQueue {
-            head: (*self.head).load(atomic::Ordering::Acquire),
-            tail: unsync_load(self.tail),
+            head: Cell::new((*self.head).load(atomic::Ordering::Acquire)),
+            tail: Cell::new(unsync_load(self.tail)),
             queue: self,
         }
     }
@@ -170,10 +171,11 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// [`push_multiple`](Self::push_multiple) and will update the queue's length if the kernel has
     /// consumed some entries in the meantime.
     #[inline]
-    pub fn sync(&mut self) {
+    pub fn sync(&self) {
         unsafe {
-            (*self.queue.tail).store(self.tail, atomic::Ordering::Release);
-            self.head = (*self.queue.head).load(atomic::Ordering::Acquire);
+            (*self.queue.tail).store(self.tail.get(), atomic::Ordering::Release);
+            self.head
+                .set((*self.queue.head).load(atomic::Ordering::Acquire));
         }
     }
 
@@ -249,7 +251,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Get the number of submission queue events in the ring buffer.
     #[inline]
     pub fn len(&self) -> usize {
-        self.tail.wrapping_sub(self.head) as usize
+        self.tail.get().wrapping_sub(self.head.get()) as usize
     }
 
     /// Returns `true` if the submission queue ring buffer is empty.
@@ -273,7 +275,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     #[inline]
-    pub unsafe fn push_inline<F>(&mut self, f: F) -> Result<(), PushError>
+    pub unsafe fn push_inline<F>(&self, f: F) -> Result<(), PushError>
     where
         F: FnOnce(&mut E),
     {
@@ -283,9 +285,9 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
             let entry = self
                 .queue
                 .sqes
-                .add((self.tail & self.queue.ring_mask) as usize);
+                .add((self.tail.get() & self.queue.ring_mask) as usize);
             f(&mut *entry);
-            self.tail = self.tail.wrapping_add(1);
+            self.tail.set(self.tail.get().wrapping_add(1));
             Ok(())
         }
     }
@@ -298,7 +300,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     #[inline]
-    pub unsafe fn push(&mut self, entry: &E) -> Result<(), PushError> {
+    pub unsafe fn push(&self, entry: &E) -> Result<(), PushError> {
         if !self.is_full() {
             self.push_unchecked(entry);
             Ok(())
@@ -316,7 +318,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// will be valid for the entire duration of the operation, otherwise it may cause memory
     /// problems.
     #[inline]
-    pub unsafe fn push_multiple(&mut self, entries: &[E]) -> Result<(), PushError> {
+    pub unsafe fn push_multiple(&self, entries: &[E]) -> Result<(), PushError> {
         if self.capacity() - self.len() < entries.len() {
             return Err(PushError);
         }
@@ -329,19 +331,19 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     }
 
     #[inline]
-    unsafe fn push_unchecked(&mut self, entry: &E) {
+    unsafe fn push_unchecked(&self, entry: &E) {
         *self
             .queue
             .sqes
-            .add((self.tail & self.queue.ring_mask) as usize) = entry.clone();
-        self.tail = self.tail.wrapping_add(1);
+            .add((self.tail.get() & self.queue.ring_mask) as usize) = entry.clone();
+        self.tail.set(self.tail.get().wrapping_add(1));
     }
 }
 
 impl<E: EntryMarker> Drop for SubmissionQueue<'_, E> {
     #[inline]
     fn drop(&mut self) {
-        unsafe { &*self.queue.tail }.store(self.tail, atomic::Ordering::Release);
+        unsafe { &*self.queue.tail }.store(self.tail.get(), atomic::Ordering::Release);
     }
 }
 
@@ -475,8 +477,8 @@ impl Error for PushError {}
 impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_list();
-        let mut pos = self.head;
-        while pos != self.tail {
+        let mut pos = self.head.get();
+        while pos != self.tail.get() {
             let entry: &E = unsafe { &*self.queue.sqes.add((pos & self.queue.ring_mask) as usize) };
             d.entry(&entry);
             pos = pos.wrapping_add(1);
