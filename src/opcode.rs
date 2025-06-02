@@ -1128,6 +1128,7 @@ opcode! {
         let Send { fd, buf, len, flags, dest_addr, dest_addr_len } = self;
 
         let sqe = &mut entry.0;
+        *sqe = sqe_zeroed();
 
         sqe.opcode = Self::CODE;
         assign_fd!(sqe.fd = fd);
@@ -1171,6 +1172,7 @@ opcode! {
         let Recv { fd, buf, len, ioprio, flags, buf_group } = self;
 
         let sqe = &mut entry.0;
+        *sqe = sqe_zeroed();
 
         assign_fd!(sqe.fd = fd);
         sqe.opcode = Self::CODE;
@@ -1960,6 +1962,7 @@ opcode! {
         let SendZc { fd, buf, len, buf_index, dest_addr, dest_addr_len, flags, zc_flags } = self;
 
         let sqe = &mut entry.0;
+        *sqe = sqe_zeroed();
 
         assign_fd!(sqe.fd = fd);
         sqe.opcode = Self::CODE;
