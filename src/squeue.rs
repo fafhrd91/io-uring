@@ -10,15 +10,15 @@ use crate::{sys, util::private, util::unsync_load, util::Mmap};
 pub(crate) struct Inner<E: EntryMarker> {
     pub(crate) head: *const atomic::AtomicU32,
     pub(crate) tail: *const atomic::AtomicU32,
-    pub(crate) ring_mask: u32,
-    pub(crate) ring_entries: u32,
     pub(crate) flags: *const atomic::AtomicU32,
+    pub(crate) ring_mask: u32,
+    pub(crate) ring_entries: usize,
     dropped: *const atomic::AtomicU32,
 
     pub(crate) sqes: *mut E,
 
-    pub(crate) sq_head: Cell<u32>,
-    pub(crate) sq_tail: Cell<u32>,
+    pub(crate) local_head: Cell<u32>,
+    pub(crate) local_tail: Cell<u32>,
 }
 
 /// An io_uring instance's submission queue. This is used to send I/O requests to the kernel.
@@ -135,8 +135,9 @@ impl<E: EntryMarker> Inner<E> {
             array.add(i as usize).write_volatile(i);
         }
 
-        let sq_head = Cell::new((*head).load(atomic::Ordering::Acquire));
-        let sq_tail = Cell::new(unsync_load(tail));
+        let ring_entries = ring_entries as usize;
+        let local_head = Cell::new((*head).load(atomic::Ordering::Acquire));
+        let local_tail = Cell::new(unsync_load(tail));
 
         Self {
             head,
@@ -146,8 +147,8 @@ impl<E: EntryMarker> Inner<E> {
             flags,
             dropped,
             sqes,
-            sq_head,
-            sq_tail
+            local_head,
+            local_tail
         }
     }
 
@@ -159,9 +160,27 @@ impl<E: EntryMarker> Inner<E> {
     #[inline]
     pub(crate) fn sync(&self) {
         unsafe {
-            (*self.tail).store(self.sq_tail.get(), atomic::Ordering::Release);
-            self.sq_head
+            let head = self.local_head.get();
+
+            (*self.tail).store(self.local_tail.get(), atomic::Ordering::Release);
+            self.local_head
                 .set((*self.head).load(atomic::Ordering::Acquire));
+
+            // need to zeroed new available slots
+            let offset = (head & self.ring_mask) as usize;
+            let offset2 = (self.local_head.get() & self.ring_mask) as usize;
+
+            if offset2 > offset {
+                // zero forward
+                self.sqes.add(offset).write_bytes(0, offset2 - offset);
+            } else if offset2 < offset {
+                // zero to the end of buffer
+                self.sqes
+                    .add(offset)
+                    .write_bytes(0, self.ring_entries - offset);
+                // zero wrapping items
+                self.sqes.write_bytes(0, offset2);
+            }
         }
     }
 }
@@ -243,16 +262,16 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Get the total number of entries in the submission queue ring buffer.
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.queue.ring_entries as usize
+        self.queue.ring_entries
     }
 
     /// Get the number of submission queue events in the ring buffer.
     #[inline]
     pub fn len(&self) -> usize {
         self.queue
-            .sq_tail
+            .local_tail
             .get()
-            .wrapping_sub(self.queue.sq_head.get()) as usize
+            .wrapping_sub(self.queue.local_head.get()) as usize
     }
 
     /// Returns `true` if the submission queue ring buffer is empty.
@@ -286,11 +305,11 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
             let entry = self
                 .queue
                 .sqes
-                .add((self.queue.sq_tail.get() & self.queue.ring_mask) as usize);
+                .add((self.queue.local_tail.get() & self.queue.ring_mask) as usize);
             f(&mut *entry);
             self.queue
-                .sq_tail
-                .set(self.queue.sq_tail.get().wrapping_add(1));
+                .local_tail
+                .set(self.queue.local_tail.get().wrapping_add(1));
             Ok(())
         }
     }
@@ -338,10 +357,10 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
         *self
             .queue
             .sqes
-            .add((self.queue.sq_tail.get() & self.queue.ring_mask) as usize) = entry.clone();
+            .add((self.queue.local_tail.get() & self.queue.ring_mask) as usize) = entry.clone();
         self.queue
-            .sq_tail
-            .set(self.queue.sq_tail.get().wrapping_add(1));
+            .local_tail
+            .set(self.queue.local_tail.get().wrapping_add(1));
     }
 }
 
@@ -475,8 +494,8 @@ impl Error for PushError {}
 impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_list();
-        let mut pos = self.queue.sq_head.get();
-        while pos != self.queue.sq_tail.get() {
+        let mut pos = self.queue.local_head.get();
+        while pos != self.queue.local_tail.get() {
             let entry: &E = unsafe { &*self.queue.sqes.add((pos & self.queue.ring_mask) as usize) };
             d.entry(&entry);
             pos = pos.wrapping_add(1);
