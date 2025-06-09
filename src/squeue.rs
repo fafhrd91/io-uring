@@ -21,6 +21,7 @@ pub(crate) struct Inner<E: EntryMarker> {
     pub(crate) local_tail: Cell<u32>,
 }
 
+#[derive(Copy, Clone)]
 /// An io_uring instance's submission queue. This is used to send I/O requests to the kernel.
 pub struct SubmissionQueue<'a, E: EntryMarker = Entry> {
     pub(crate) queue: &'a Inner<E>,
