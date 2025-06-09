@@ -248,8 +248,8 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     ///
     /// No other [`SubmissionQueue`]s may exist when calling this function.
     #[inline]
-    pub unsafe fn submission_shared(&self) -> SubmissionQueue<'_, S> {
-        self.sq.borrow_shared()
+    pub fn submission_shared(&self) -> SubmissionQueue<'_, S> {
+        self.sq.borrow()
     }
 
     /// Get completion queue of the io_uring instance. This is used to receive I/O completion
