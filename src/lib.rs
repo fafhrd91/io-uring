@@ -47,6 +47,7 @@
 mod util;
 pub mod cqueue;
 pub mod opcode;
+pub mod opcode2;
 pub mod register;
 pub mod squeue;
 mod submit;
@@ -279,18 +280,19 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// Get the submission queue of the io_uring instance. This is used to send I/O requests to the
     /// kernel.
     #[inline]
-    pub fn submission(&mut self) -> SubmissionQueue<'_, S> {
+    pub fn submission(&self) -> SubmissionQueue<'_, S> {
         self.sq.borrow()
     }
 
+    #[deprecated]
     /// Get the submission queue of the io_uring instance from a shared reference.
     ///
     /// # Safety
     ///
     /// No other [`SubmissionQueue`]s may exist when calling this function.
     #[inline]
-    pub unsafe fn submission_shared(&self) -> SubmissionQueue<'_, S> {
-        self.sq.borrow_shared()
+    pub fn submission_shared(&self) -> SubmissionQueue<'_, S> {
+        self.sq.borrow()
     }
 
     /// Get completion queue of the io_uring instance. This is used to receive I/O completion
