@@ -7,6 +7,7 @@
 mod util;
 pub mod cqueue;
 pub mod opcode;
+pub mod opcode2;
 pub mod register;
 pub mod squeue;
 mod submit;
