@@ -13,6 +13,15 @@ macro_rules! assign_fd {
             }
         }
     };
+    ( $sqe:ident . 0 . fd = $opfd:expr ) => {
+        match $opfd.into() {
+            sealed::Target::Fd(fd) => $sqe.0.fd = fd,
+            sealed::Target::Fixed(idx) => {
+                $sqe.0.fd = idx as _;
+                $sqe.0.__bindgen_anon_3.msg_flags = crate::squeue::Flags::FIXED_FILE.bits() as u32;
+            }
+        }
+    };
 }
 
 macro_rules! opcode {
@@ -31,6 +40,14 @@ macro_rules! opcode {
                 Self { sqe: &mut entry.0 }
             }
 
+            pub fn with(entry: &'a mut Entry, fd: impl sealed::UseFixed) -> Self {
+                entry.0.opcode = Self::CODE;
+                assign_fd!(entry.0.fd = fd);
+
+                Self { sqe: &mut entry.0 }
+            }
+
+            #[doc(hidden)]
             pub fn fd(self, fd: impl sealed::UseFixed) -> Self {
                 assign_fd!(self.sqe.fd = fd);
                 self
@@ -53,11 +70,19 @@ macro_rules! opcode {
 
 macro_rules! opcode_buf {
     () => {
+        pub fn buffer(self, buf: *mut u8, len: u32) -> Self {
+            self.sqe.__bindgen_anon_2.addr = buf as _;
+            self.sqe.len = len;
+            self
+        }
+
+        #[doc(hidden)]
         pub fn buf(self, buf: *mut u8) -> Self {
             self.sqe.__bindgen_anon_2.addr = buf as _;
             self
         }
 
+        #[doc(hidden)]
         pub fn len(self, len: u32) -> Self {
             self.sqe.len = len;
             self
@@ -67,11 +92,19 @@ macro_rules! opcode_buf {
 
 macro_rules! opcode_send_buf {
     () => {
+        pub fn buffer(self, buf: *const u8, len: u32) -> Self {
+            self.sqe.__bindgen_anon_2.addr = buf as _;
+            self.sqe.len = len;
+            self
+        }
+
+        #[doc(hidden)]
         pub fn buf(self, buf: *const u8) -> Self {
             self.sqe.__bindgen_anon_2.addr = buf as _;
             self
         }
 
+        #[doc(hidden)]
         pub fn len(self, len: u32) -> Self {
             self.sqe.len = len;
             self
