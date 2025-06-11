@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io-uring"
-version = "0.7.110"
+version = "0.7.120"
 authors = ["quininer <quininer@live.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
