@@ -570,7 +570,7 @@ impl<'buf> RecvMsgOut<'buf> {
 /// ### Examples
 ///
 /// ```
-/// use io_uring::types::{CancelBuilder, Fd, Fixed};
+/// use ntex_io_uring::types::{CancelBuilder, Fd, Fixed};
 ///
 /// // Match all in-flight requests.
 /// CancelBuilder::any();

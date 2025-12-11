@@ -4,17 +4,18 @@ version = "0.7.120"
 authors = ["quininer <quininer@live.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/tokio-rs/io-uring"
-homepage = "https://github.com/tokio-rs/io-uring"
-documentation = "https://docs.rs/io-uring"
+repository = "https://github.com/fafhrd91/io-uring"
+homepage = "https://github.com/fafhrd91/io-uring"
+documentation = "https://docs.rs/ntex-io-uring"
 description = "The low-level `io_uring` userspace interface for Rust"
 categories = [ "asynchronous", "network-programming", "filesystem" ]
-rust-version = "1.75"
+rust-version = "1.63"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
 exclude = []
+members = [ "io-uring-test", "io-uring-bench" ]
 
 [features]
 overwrite = [ "bindgen" ]
@@ -35,3 +36,4 @@ bindgen = { version = "0.69", optional = true }
 anyhow = "1"
 socket2 = "0.5"
 slab = "0.4"
+io-uring = { path = ".", package = "ntex-io-uring" }
