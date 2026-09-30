@@ -191,7 +191,7 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     for _ in 0..sq.capacity() {
         unsafe {
-            sq.push(&opcode::Nop::new().build().into())
+            sq.push(&opcode::Nop::new().build().user_data(0x42).into())
                 .expect("queue is full");
         }
     }
@@ -211,6 +211,23 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cq.by_ref().count(), sq.capacity());
 
     cq.sync();
+
+    // the whole ring was consumed, reused slots must be zeroed
+    unsafe {
+        sq.push_inline(|entry: &mut S| {
+            let bytes = std::slice::from_raw_parts(
+                (entry as *const S).cast::<u8>(),
+                std::mem::size_of::<S>(),
+            );
+            assert!(bytes.iter().all(|b| *b == 0), "reused sqe is not zeroed");
+            *entry = opcode::Nop::new().build().into();
+        })
+        .expect("queue is full");
+    }
+    sq.sync();
+    assert_eq!(submitter.submit()?, 1);
+    cq.sync();
+    assert_eq!(cq.by_ref().count(), 1);
 
     Ok(())
 }

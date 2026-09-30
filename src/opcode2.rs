@@ -189,3 +189,16 @@ impl<'a> SendZc<'a> {
         self
     }
 }
+
+opcode! {
+    /// Vectored write, equivalent to `pwritev2(2)`.
+    Writev, sys::IORING_OP_WRITEV
+}
+
+impl<'a> Writev<'a> {
+    pub fn iovec(self, iovec: *const libc::iovec, nr: u32) -> Self {
+        self.sqe.__bindgen_anon_2.addr = iovec as _;
+        self.sqe.len = nr;
+        self
+    }
+}

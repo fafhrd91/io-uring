@@ -224,24 +224,17 @@ impl<E: EntryMarker> Inner<E> {
             let head = self.local_head.get();
 
             (*self.tail).store(self.local_tail.get(), atomic::Ordering::Release);
-            self.local_head
-                .set((*self.head).load(atomic::Ordering::Acquire));
+            let new_head = (*self.head).load(atomic::Ordering::Acquire);
+            self.local_head.set(new_head);
 
-            // need to zeroed new available slots
+            // zero slots consumed by the kernel, so they can be reused by `push_inline`.
+            // count is based on head distance, ring offsets are equal when whole ring is consumed
+            let consumed = (new_head.wrapping_sub(head) as usize).min(self.ring_entries);
             let offset = (head & self.ring_mask) as usize;
-            let offset2 = (self.local_head.get() & self.ring_mask) as usize;
+            let first = consumed.min(self.ring_entries - offset);
 
-            if offset2 > offset {
-                // zero forward
-                self.sqes.add(offset).write_bytes(0, offset2 - offset);
-            } else if offset2 < offset {
-                // zero to the end of buffer
-                self.sqes
-                    .add(offset)
-                    .write_bytes(0, self.ring_entries - offset);
-                // zero wrapping items
-                self.sqes.write_bytes(0, offset2);
-            }
+            self.sqes.add(offset).write_bytes(0, first);
+            self.sqes.write_bytes(0, consumed - first);
         }
     }
 }
