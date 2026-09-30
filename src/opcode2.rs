@@ -1,27 +1,19 @@
 use crate::{squeue::Entry, sys, types::sealed};
 
 macro_rules! assign_fd {
-    ( $sqe:ident . sqe . fd = $opfd:expr ) => {
+    ( $sqe:expr, $opfd:expr ) => {{
+        let sqe: &mut sys::io_uring_sqe = $sqe;
         match $opfd.into() {
-            sealed::Target::Fd(fd) => $sqe.sqe.fd = fd,
+            sealed::Target::Fd(fd) => {
+                sqe.fd = fd;
+                sqe.flags &= !crate::squeue::Flags::FIXED_FILE.bits();
+            }
             sealed::Target::Fixed(idx) => {
-                $sqe.sqe.fd = idx as _;
-                unsafe {
-                    $sqe.sqe.__bindgen_anon_3.msg_flags |=
-                        crate::squeue::Flags::FIXED_FILE.bits() as u32;
-                }
+                sqe.fd = idx as _;
+                sqe.flags |= crate::squeue::Flags::FIXED_FILE.bits();
             }
         }
-    };
-    ( $sqe:ident . 0 . fd = $opfd:expr ) => {
-        match $opfd.into() {
-            sealed::Target::Fd(fd) => $sqe.0.fd = fd,
-            sealed::Target::Fixed(idx) => {
-                $sqe.0.fd = idx as _;
-                $sqe.0.__bindgen_anon_3.msg_flags = crate::squeue::Flags::FIXED_FILE.bits() as u32;
-            }
-        }
-    };
+    }};
 }
 
 macro_rules! opcode {
@@ -42,14 +34,14 @@ macro_rules! opcode {
 
             pub fn with(entry: &'a mut Entry, fd: impl sealed::UseFixed) -> Self {
                 entry.0.opcode = Self::CODE;
-                assign_fd!(entry.0.fd = fd);
+                assign_fd!(&mut entry.0, fd);
 
                 Self { sqe: &mut entry.0 }
             }
 
             #[doc(hidden)]
             pub fn fd(self, fd: impl sealed::UseFixed) -> Self {
-                assign_fd!(self.sqe.fd = fd);
+                assign_fd!(&mut *self.sqe, fd);
                 self
             }
 
@@ -200,5 +192,25 @@ impl<'a> Writev<'a> {
         self.sqe.__bindgen_anon_2.addr = iovec as _;
         self.sqe.len = nr;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{squeue::Flags, types};
+
+    #[test]
+    fn fixed_fd_sets_sqe_flag() {
+        let mut entry = Entry::default();
+        Recv::with(&mut entry, types::Fixed(3));
+        assert_eq!(entry.0.fd, 3);
+        assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
+        assert_eq!(unsafe { entry.0.__bindgen_anon_3.msg_flags }, 0);
+
+        Recv::new(&mut entry).fd(types::Fd(5));
+        assert_eq!(entry.0.fd, 5);
+        assert_eq!(entry.0.flags, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_3.msg_flags }, 0);
     }
 }
