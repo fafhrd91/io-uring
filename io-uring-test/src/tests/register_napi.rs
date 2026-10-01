@@ -1,9 +1,9 @@
 use std::io;
 
-use io_uring::cqueue;
-use io_uring::squeue;
-use io_uring::types::{Napi, NapiTracking};
-use io_uring::IoUring;
+use ntex_io_uring::cqueue;
+use ntex_io_uring::squeue;
+use ntex_io_uring::types::{Napi, NapiTracking};
+use ntex_io_uring::IoUring;
 
 use crate::Test;
 

@@ -242,7 +242,7 @@ impl From<std::time::Duration> for Timespec {
 /// Note that arguments that exceed their lifetime will fail to compile.
 ///
 /// ```compile_fail
-/// use io_uring::types::{ SubmitArgs, Timespec };
+/// use ntex_io_uring::types::{ SubmitArgs, Timespec };
 ///
 /// let sigmask: libc::sigset_t = unsafe { std::mem::zeroed() };
 ///

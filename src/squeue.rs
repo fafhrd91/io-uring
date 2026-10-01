@@ -53,7 +53,7 @@ pub trait EntryMarker: Clone + Debug + From<Entry> + private::Sealed {
 /// # Example
 ///
 /// ```
-/// use io_uring::{opcode, types};
+/// use ntex_io_uring::{opcode, types};
 /// use std::ffi::CString;
 ///
 /// let path = CString::new("/etc/passwd").unwrap();
@@ -75,7 +75,7 @@ pub struct Entry(pub(crate) sys::io_uring_sqe);
 /// # Example
 ///
 /// ```
-/// use io_uring::{opcode, squeue::Entry128, types};
+/// use ntex_io_uring::{opcode, squeue::Entry128, types};
 /// use std::ffi::CString;
 ///
 /// let path = CString::new("/etc/passwd").unwrap();

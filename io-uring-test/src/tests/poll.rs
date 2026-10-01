@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd};
@@ -224,11 +224,11 @@ pub fn test_eventfd_poll_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes.len(), 2);
 
     assert_eq!(cqes[0].user_data(), 0x04);
-    assert!(io_uring::cqueue::more(cqes[0].flags()));
+    assert!(ntex_io_uring::cqueue::more(cqes[0].flags()));
     assert_eq!(cqes[0].result(), 1);
 
     assert_eq!(cqes[1].user_data(), 0x04);
-    assert!(io_uring::cqueue::more(cqes[1].flags()));
+    assert!(ntex_io_uring::cqueue::more(cqes[1].flags()));
     assert_eq!(cqes[1].result(), 1);
 
     Ok(())

@@ -1,9 +1,9 @@
 use crate::tests::register_buf_ring;
 use crate::utils;
 use crate::Test;
-use io_uring::squeue::Flags;
-use io_uring::types::{BufRingEntry, Fd};
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::squeue::Flags;
+use ntex_io_uring::types::{BufRingEntry, Fd};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use once_cell::sync::OnceCell;
 use std::convert::TryInto;
 use std::io::{Read, Write};
@@ -226,18 +226,18 @@ pub fn test_tcp_zero_copy_send_recv<S: squeue::EntryMarker, C: cqueue::EntryMark
     assert_eq!(cqes.len(), 3);
     // Send completion is ordered w.r.t recv
     assert_eq!(cqes[0].user_data(), 0x01);
-    assert!(io_uring::cqueue::more(cqes[0].flags()));
+    assert!(ntex_io_uring::cqueue::more(cqes[0].flags()));
     assert_eq!(cqes[0].result(), text.len() as i32);
 
     // Notification is not ordered w.r.t recv
     match (cqes[1].user_data(), cqes[2].user_data()) {
         (0x01, 0x02) => {
-            assert!(!io_uring::cqueue::more(cqes[1].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[1].flags()));
             assert_eq!(cqes[2].result(), text.len() as i32);
             assert_eq!(&output[..cqes[2].result() as usize], text);
         }
         (0x02, 0x01) => {
-            assert!(!io_uring::cqueue::more(cqes[2].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[2].flags()));
             assert_eq!(cqes[1].result(), text.len() as i32);
             assert_eq!(&output[..cqes[1].result() as usize], text);
         }
@@ -309,18 +309,18 @@ pub fn test_tcp_zero_copy_send_fixed<S: squeue::EntryMarker, C: cqueue::EntryMar
     assert_eq!(cqes.len(), 3);
     // Send completion is ordered w.r.t recv
     assert_eq!(cqes[0].user_data(), 0x01);
-    assert!(io_uring::cqueue::more(cqes[0].flags()));
+    assert!(ntex_io_uring::cqueue::more(cqes[0].flags()));
     assert_eq!(cqes[0].result(), text.len() as i32);
 
     // Notification is not ordered w.r.t recv
     match (cqes[1].user_data(), cqes[2].user_data()) {
         (0x01, 0x02) => {
-            assert!(!io_uring::cqueue::more(cqes[1].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[1].flags()));
             assert_eq!(cqes[2].result(), text.len() as i32);
             assert_eq!(&output[..cqes[2].result() as usize], text);
         }
         (0x02, 0x01) => {
-            assert!(!io_uring::cqueue::more(cqes[2].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[2].flags()));
             assert_eq!(cqes[1].result(), text.len() as i32);
             assert_eq!(&output[..cqes[1].result() as usize], text);
         }
@@ -495,18 +495,18 @@ pub fn test_tcp_zero_copy_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::Ent
 
     // Send completion is ordered w.r.t recv
     assert_eq!(cqes[0].user_data(), 0x01);
-    assert!(io_uring::cqueue::more(cqes[0].flags()));
+    assert!(ntex_io_uring::cqueue::more(cqes[0].flags()));
     assert_eq!(cqes[0].result(), text.len() as i32);
 
     // Notification is not ordered w.r.t recv
     match (cqes[1].user_data(), cqes[2].user_data()) {
         (0x01, 0x02) => {
-            assert!(!io_uring::cqueue::more(cqes[1].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[1].flags()));
             assert_eq!(cqes[2].result(), text.len() as i32);
             assert_eq!(&buf2[..cqes[2].result() as usize], text);
         }
         (0x02, 0x01) => {
-            assert!(!io_uring::cqueue::more(cqes[2].flags()));
+            assert!(!ntex_io_uring::cqueue::more(cqes[2].flags()));
             assert_eq!(cqes[1].result(), text.len() as i32);
             assert_eq!(&buf2[..cqes[1].result() as usize], text);
         }
@@ -1518,8 +1518,8 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
         // Set value.
         optval = 1;
-        let op = io_uring::opcode::SetSockOpt::new(
-            io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+        let op = ntex_io_uring::opcode::SetSockOpt::new(
+            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
             libc::SOL_SOCKET as u32,
             libc::SO_REUSEADDR as u32,
             &optval as *const _ as *const libc::c_void,
@@ -1635,8 +1635,8 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     {
         let server_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let server_addr: socket2::SockAddr = server_addr.into();
-        let op = io_uring::opcode::Bind::new(
-            io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+        let op = ntex_io_uring::opcode::Bind::new(
+            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
             server_addr.as_ptr() as *const _,
             server_addr.len(),
         )
@@ -1665,10 +1665,12 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Try to listen.
     {
-        let op =
-            io_uring::opcode::Listen::new(io_uring::types::Fd(io_uring_socket.as_raw_fd()), 128)
-                .build()
-                .user_data(3456);
+        let op = ntex_io_uring::opcode::Listen::new(
+            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+            128,
+        )
+        .build()
+        .user_data(3456);
         unsafe {
             ring.submission().push(&op.into()).expect("queue is full");
         }
@@ -1753,7 +1755,7 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     const SIZE: usize = 512;
     let mut buffers = [[0u8; SIZE]; 2];
     for (index, buf) in buffers.iter_mut().enumerate() {
-        let provide_bufs_e = io_uring::opcode::ProvideBuffers::new(
+        let provide_bufs_e = ntex_io_uring::opcode::ProvideBuffers::new(
             buf.as_mut_ptr(),
             SIZE as i32,
             1,
@@ -1765,7 +1767,7 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
         .into();
         unsafe { ring.submission().push(&provide_bufs_e)? };
         ring.submitter().submit_and_wait(1)?;
-        let cqes: Vec<io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
+        let cqes: Vec<ntex_io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
         assert_eq!(cqes.len(), 1);
         assert_eq!(cqes[0].user_data(), 11);
         assert_eq!(cqes[0].result(), 0);
@@ -1830,10 +1832,10 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     // Check the completion events for the two UDP messages, plus a trailing
     // CQE signaling that we ran out of buffers.
     ring.submitter().submit_and_wait(6).unwrap();
-    let cqes: Vec<io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
+    let cqes: Vec<ntex_io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
     assert_eq!(cqes.len(), 6);
     for cqe in cqes {
-        let is_more = io_uring::cqueue::more(cqe.flags());
+        let is_more = ntex_io_uring::cqueue::more(cqe.flags());
         match cqe.user_data() {
             // send notifications
             55 => {
@@ -1851,7 +1853,7 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
             // RecvMsgMulti
             77 if is_more => {
                 assert!(cqe.result() > 0, "{:?}", cqe.result());
-                let buf_id = io_uring::cqueue::buffer_select(cqe.flags()).unwrap();
+                let buf_id = ntex_io_uring::cqueue::buffer_select(cqe.flags()).unwrap();
                 let tmp_buf = &buffers[buf_id as usize];
                 let msg = types::RecvMsgOut::parse(tmp_buf, &msghdr).unwrap();
                 assert!([25, 15].contains(&msg.payload_data().len()));
@@ -2118,7 +2120,7 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
     const SIZE: usize = 512;
     let mut buffers = [[0u8; SIZE]; 2];
     for (index, buf) in buffers.iter_mut().enumerate() {
-        let provide_bufs_e = io_uring::opcode::ProvideBuffers::new(
+        let provide_bufs_e = ntex_io_uring::opcode::ProvideBuffers::new(
             buf.as_mut_ptr(),
             SIZE as i32,
             1,
@@ -2130,7 +2132,7 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
         .into();
         unsafe { ring.submission().push(&provide_bufs_e)? };
         ring.submitter().submit_and_wait(1)?;
-        let cqes: Vec<io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
+        let cqes: Vec<ntex_io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
         assert_eq!(cqes.len(), 1);
         assert_eq!(cqes[0].user_data(), 11);
         assert_eq!(cqes[0].result(), 0);
@@ -2303,7 +2305,7 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     };
 
     // Create test-specific ring as we need special flags for zcrx.
-    let mut ring = io_uring::IoUring::<S, cqueue::Entry32>::builder()
+    let mut ring = ntex_io_uring::IoUring::<S, cqueue::Entry32>::builder()
         .setup_defer_taskrun()
         .setup_single_issuer()
         .build(8)?;
@@ -2425,7 +2427,7 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     {
         assert!(cqe.result() >= 0);
         let fd = cqe.result();
-        let mut squeue = unsafe { ring.submission_shared() };
+        let squeue = ring.submission();
         let sqe = opcode::RecvZc::new(types::Fd(fd), STREAM_SIZE)
             .ifq(reg.zcrx_id)
             .build()

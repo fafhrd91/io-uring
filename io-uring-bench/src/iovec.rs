@@ -2,7 +2,7 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use io_uring::{opcode, squeue, types, IoUring};
+use ntex_io_uring::{opcode, squeue, types, IoUring};
 use tempfile::tempfile;
 
 fn bench_iovec(c: &mut Criterion) {

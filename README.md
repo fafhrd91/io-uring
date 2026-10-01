@@ -13,14 +13,14 @@ To use `io-uring` crate, first add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-io-uring = "0.7"
+ntex-io-uring = "0.7"
 ```
 
 Next we can start using `io-uring` crate.
 The following is quick introduction using `Read` for file.
 
 ```rust
-use io_uring::{opcode, types, IoUring};
+use ntex_io_uring::{opcode, types, IoUring};
 use std::os::unix::io::AsRawFd;
 use std::{fs, io};
 

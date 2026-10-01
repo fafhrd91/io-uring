@@ -1,6 +1,6 @@
 use crate::Test;
-use io_uring::types::FutexWaitV;
-use io_uring::{cqueue, opcode, squeue, IoUring};
+use ntex_io_uring::types::FutexWaitV;
+use ntex_io_uring::{cqueue, opcode, squeue, IoUring};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

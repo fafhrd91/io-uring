@@ -1,6 +1,6 @@
 use crate::Test;
-use io_uring::types::CancelBuilder;
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::types::CancelBuilder;
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::fs::File;
 use std::os::fd::FromRawFd;
 use std::os::unix::io::AsRawFd;

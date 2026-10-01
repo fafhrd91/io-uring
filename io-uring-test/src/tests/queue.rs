@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::time::{Duration, Instant};
 
 pub fn test_nop<S: squeue::EntryMarker, C: cqueue::EntryMarker>(

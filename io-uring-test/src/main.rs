@@ -2,7 +2,7 @@
 mod utils;
 mod tests;
 
-use io_uring::{cqueue, squeue, IoUring, Probe};
+use ntex_io_uring::{cqueue, squeue, IoUring, Probe};
 use std::cell::Cell;
 
 pub struct Test {

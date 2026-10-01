@@ -23,7 +23,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! io-uring = { version = "0.7", features = ["bindgen"] }
+//! ntex-io-uring = { version = "0.7", features = ["bindgen"] }
 //! ```
 //!
 //! This will generate bindings at build time for your specific architecture.

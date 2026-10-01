@@ -3,12 +3,12 @@ use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 
-use io_uring::cqueue;
-use io_uring::opcode;
-use io_uring::squeue;
-use io_uring::types;
-use io_uring::types::CancelBuilder;
-use io_uring::IoUring;
+use ntex_io_uring::cqueue;
+use ntex_io_uring::opcode;
+use ntex_io_uring::squeue;
+use ntex_io_uring::types;
+use ntex_io_uring::types::CancelBuilder;
+use ntex_io_uring::IoUring;
 
 use crate::Test;
 

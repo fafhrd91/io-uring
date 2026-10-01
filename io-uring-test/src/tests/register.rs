@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, IoUring};
 
 pub fn test_register_files_sparse<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
@@ -101,7 +101,7 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         }
     }
 
-    let mut probe = io_uring::Probe::new();
+    let mut probe = ntex_io_uring::Probe::new();
     submitter.register_probe(&mut probe)?;
 
     let mut other_submitter = ring.submitter();

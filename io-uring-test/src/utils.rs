@@ -1,4 +1,4 @@
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::io::{IoSlice, IoSliceMut};
 
 macro_rules! require {

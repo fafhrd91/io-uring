@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, IoUring};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;

@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, IoUring};
 use std::{
     io::{PipeReader, PipeWriter, Read, Write},
     os::fd::FromRawFd,

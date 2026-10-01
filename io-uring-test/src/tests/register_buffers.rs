@@ -1,12 +1,12 @@
 use crate::Test;
-use io_uring::{
+use libc::iovec;
+use ntex_io_uring::{
     cqueue,
     opcode::{ReadFixed, WriteFixed},
     squeue,
     types::Fd,
     IoUring,
 };
-use libc::iovec;
 use std::{
     fs::File,
     io::{self, IoSliceMut},
@@ -16,8 +16,8 @@ use std::{
     os::fd::FromRawFd,
 };
 
-use io_uring::{opcode, types};
 use libc::EFAULT;
+use ntex_io_uring::{opcode, types};
 
 pub fn test_register_buffers<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,

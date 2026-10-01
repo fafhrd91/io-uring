@@ -2,9 +2,9 @@
 // The entry point in this file can be found by searching for 'pub'.
 
 use crate::Test;
-use io_uring::types;
-use io_uring::types::BufRingEntry;
-use io_uring::{cqueue, opcode, squeue, IoUring};
+use ntex_io_uring::types;
+use ntex_io_uring::types::BufRingEntry;
+use ntex_io_uring::{cqueue, opcode, squeue, IoUring};
 
 use std::cell::Cell;
 use std::fmt;
@@ -269,7 +269,7 @@ impl InnerBufRing {
         // the same BufRing but wrapped in Rc<_> so the wrapped buf_ring can be passed to the
         // outgoing GBuf.
 
-        let bid = io_uring::cqueue::buffer_select(flags).unwrap();
+        let bid = ntex_io_uring::cqueue::buffer_select(flags).unwrap();
 
         let len = res as usize;
 
@@ -280,7 +280,7 @@ impl InnerBufRing {
 
     // Returns vector of buffers for completion results that can return a bundle
     pub(crate) fn get_bufs(&self, buf_ring: &FixedSizeBufRing, res: u32, flags: u32) -> Vec<GBuf> {
-        let mut bid = io_uring::cqueue::buffer_select(flags).unwrap();
+        let mut bid = ntex_io_uring::cqueue::buffer_select(flags).unwrap();
         let mut len = res as usize;
         let mut output = Vec::with_capacity(len / self.buf_len);
         while len > 0 {

@@ -1,5 +1,5 @@
 use crate::Test;
-use io_uring::{cqueue, squeue, IoUring};
+use ntex_io_uring::{cqueue, squeue, IoUring};
 
 pub fn test_issue154<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     _ring: &mut IoUring<S, C>,

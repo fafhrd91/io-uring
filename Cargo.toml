@@ -9,7 +9,7 @@ homepage = "https://github.com/fafhrd91/io-uring"
 documentation = "https://docs.rs/ntex-io-uring"
 description = "The low-level `io_uring` userspace interface for Rust"
 categories = [ "asynchronous", "network-programming", "filesystem" ]
-rust-version = "1.63"
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -36,4 +36,3 @@ bindgen = { version = "0.69", optional = true }
 anyhow = "1"
 socket2 = "0.5"
 slab = "0.4"
-io-uring = { path = ".", package = "ntex-io-uring" }

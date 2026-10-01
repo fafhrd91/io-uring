@@ -5,7 +5,7 @@ use ::std::{
     os::fd::{AsFd, FromRawFd, RawFd},
     thread,
 };
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::os::unix::io::AsRawFd;
 
 // Tests translated from liburing/test/epwait.c.

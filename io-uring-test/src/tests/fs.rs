@@ -1,6 +1,6 @@
 use crate::utils;
 use crate::Test;
-use io_uring::{cqueue, opcode, squeue, types, IoUring};
+use ntex_io_uring::{cqueue, opcode, squeue, types, IoUring};
 use std::ffi::CString;
 use std::fs;
 use std::io::{Read, Write};
