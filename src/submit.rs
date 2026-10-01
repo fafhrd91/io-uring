@@ -85,7 +85,7 @@ impl<'a> Submitter<'a> {
     /// Publish entries pushed to the submission queue, so they are visible to the kernel.
     #[inline]
     fn flush_sq(&self) {
-        unsafe { (*self.sq_tail).store(self.sq_local_tail.get(), atomic::Ordering::Release) }
+        unsafe { crate::squeue::publish_tail(self.sq_tail, self.sq_local_tail.get()) }
     }
 
     #[inline]

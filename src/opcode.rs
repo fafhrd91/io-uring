@@ -1199,7 +1199,6 @@ opcode! {
         sqe.ioprio = ioprio;
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
-        sqe.ioprio = ioprio;
         sqe.__bindgen_anon_3.msg_flags = flags as _;
         sqe.__bindgen_anon_4.buf_group = buf_group;
         Entry(sqe)

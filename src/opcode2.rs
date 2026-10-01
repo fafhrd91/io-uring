@@ -193,6 +193,14 @@ impl<'a> Writev<'a> {
         self.sqe.len = nr;
         self
     }
+
+    /// File offset to write at, defaults to `0`.
+    ///
+    /// Use `u64::MAX` to write at the current file position.
+    pub fn offset(self, offset: u64) -> Self {
+        self.sqe.__bindgen_anon_1.off = offset;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +220,15 @@ mod tests {
         assert_eq!(entry.0.fd, 5);
         assert_eq!(entry.0.flags, 0);
         assert_eq!(unsafe { entry.0.__bindgen_anon_3.msg_flags }, 0);
+    }
+
+    #[test]
+    fn writev_sets_offset() {
+        let mut entry = Entry::default();
+        Writev::with(&mut entry, types::Fd(1)).iovec(std::ptr::null(), 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 0);
+
+        Writev::new(&mut entry).offset(u64::MAX);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, u64::MAX);
     }
 }

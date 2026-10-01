@@ -75,6 +75,19 @@ use util::{Mmap, OwnedFd};
 ///   [`squeue::Entry128`];
 /// - `C`: The ring's completion queue entry (CQE) type, either [`cqueue::Entry`] or
 ///   [`cqueue::Entry32`].
+///
+/// The queues keep unsynchronized local state, so an instance is neither `Send` nor `Sync`
+/// and must be used from the thread that created it.
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// assert_send::<ntex_io_uring::IoUring>();
+/// ```
+///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<ntex_io_uring::IoUring>();
+/// ```
 pub struct IoUring<S = squeue::Entry, C = cqueue::Entry>
 where
     S: squeue::EntryMarker,
@@ -113,9 +126,6 @@ where
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct Parameters(sys::io_uring_params);
-
-unsafe impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Send for IoUring<S, C> {}
-unsafe impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Sync for IoUring<S, C> {}
 
 impl IoUring<squeue::Entry, cqueue::Entry> {
     /// Create a new `IoUring` instance with default configuration parameters. See [`Builder`] to
@@ -288,12 +298,11 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         self.sq.borrow()
     }
 
-    #[deprecated]
     /// Get the submission queue of the io_uring instance from a shared reference.
     ///
-    /// # Safety
-    ///
-    /// No other [`SubmissionQueue`]s may exist when calling this function.
+    /// Equivalent to [`submission`](Self::submission). Queue state is shared, so multiple
+    /// [`SubmissionQueue`] handles may coexist.
+    #[deprecated(note = "use `IoUring::submission` instead")]
     #[inline]
     pub fn submission_shared(&self) -> SubmissionQueue<'_, S> {
         self.sq.sync();

@@ -19,6 +19,10 @@ pub(crate) struct Inner<E: EntryMarker> {
 
     pub(crate) local_head: Cell<u32>,
     pub(crate) local_tail: Cell<u32>,
+
+    /// Set while a `push_inline` closure runs, to detect re-entrant pushes.
+    #[cfg(debug_assertions)]
+    pushing: Cell<bool>,
 }
 
 #[derive(Clone)]
@@ -209,7 +213,9 @@ impl<E: EntryMarker> Inner<E> {
             dropped,
             sqes,
             local_head,
-            local_tail
+            local_tail,
+            #[cfg(debug_assertions)]
+            pushing: Cell::new(false),
         }
     }
 
@@ -221,21 +227,48 @@ impl<E: EntryMarker> Inner<E> {
     #[inline]
     pub(crate) fn sync(&self) {
         unsafe {
-            let head = self.local_head.get();
-
-            (*self.tail).store(self.local_tail.get(), atomic::Ordering::Release);
-            let new_head = (*self.head).load(atomic::Ordering::Acquire);
-            self.local_head.set(new_head);
-
-            // zero slots consumed by the kernel, so they can be reused by `push_inline`.
-            // count is based on head distance, ring offsets are equal when whole ring is consumed
-            let consumed = (new_head.wrapping_sub(head) as usize).min(self.ring_entries);
-            let offset = (head & self.ring_mask) as usize;
-            let first = consumed.min(self.ring_entries - offset);
-
-            self.sqes.add(offset).write_bytes(0, first);
-            self.sqes.write_bytes(0, consumed - first);
+            publish_tail(self.tail, self.local_tail.get());
+            self.local_head
+                .set((*self.head).load(atomic::Ordering::Acquire));
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sync_cold(&self) {
+        self.sync();
+    }
+
+    #[inline]
+    #[track_caller]
+    fn debug_assert_not_pushing(&self) {
+        #[cfg(debug_assertions)]
+        assert!(
+            !self.pushing.get(),
+            "submission queue push from within a `push_inline` closure"
+        );
+    }
+}
+
+/// Marks the queue as inside a `push_inline` closure; cleared on drop, including on unwind.
+#[cfg(debug_assertions)]
+struct PushGuard<'a>(&'a Cell<bool>);
+
+#[cfg(debug_assertions)]
+impl Drop for PushGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+/// Publish the local tail to the kernel.
+///
+/// The tail is only written by userspace, so skip the store if it is already published,
+/// to avoid dirtying a cache line shared with the kernel (sq poll thread).
+#[inline]
+pub(crate) unsafe fn publish_tail(tail: *const atomic::AtomicU32, local_tail: u32) {
+    if unsync_load(tail) != local_tail {
+        (*tail).store(local_tail, atomic::Ordering::Release);
     }
 }
 
@@ -341,30 +374,58 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
         self.len() == self.capacity()
     }
 
-    /// Attempts to push an entry into the queue.
-    /// If the queue is full, an error is returned.
+    /// Check that `n` entries can be pushed, synchronizing with the kernel if the queue looks full.
+    #[inline]
+    fn has_space(&self, n: usize) -> bool {
+        if self.capacity() - self.len() >= n {
+            true
+        } else {
+            self.queue.sync_cold();
+            self.capacity() - self.len() >= n
+        }
+    }
+
+    /// Attempts to push an entry into the queue, initializing it in place with `f`.
+    /// The entry passed to `f` is zeroed.
+    /// If the queue is full, an error is returned and `f` is not called.
     ///
     /// # Safety
     ///
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
+    ///
+    /// `f` must not push to this submission queue (via [`push`](Self::push),
+    /// [`push_inline`](Self::push_inline) or [`push_multiple`](Self::push_multiple)). The entry
+    /// is not reserved until `f` returns, so a nested push would alias the entry being
+    /// initialized and could submit a stale entry or overrun the queue. Debug builds panic on
+    /// such a nested push.
     #[inline]
+    #[track_caller]
     pub unsafe fn push_inline<F>(&self, f: F) -> Result<(), PushError>
     where
         F: FnOnce(&mut E),
     {
-        if self.is_full() {
-            Err(PushError)
-        } else {
+        self.queue.debug_assert_not_pushing();
+        if self.has_space(1) {
+            #[cfg(debug_assertions)]
+            let _guard = {
+                self.queue.pushing.set(true);
+                PushGuard(&self.queue.pushing)
+            };
+
             let entry = self
                 .queue
                 .sqes
                 .add((self.queue.local_tail.get() & self.queue.ring_mask) as usize);
+            // slot may hold an entry already consumed by the kernel
+            entry.write_bytes(0, 1);
             f(&mut *entry);
             self.queue
                 .local_tail
                 .set(self.queue.local_tail.get().wrapping_add(1));
             Ok(())
+        } else {
+            Err(PushError)
         }
     }
 
@@ -376,8 +437,10 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     #[inline]
+    #[track_caller]
     pub unsafe fn push(&self, entry: &E) -> Result<(), PushError> {
-        if !self.is_full() {
+        self.queue.debug_assert_not_pushing();
+        if self.has_space(1) {
             self.push_unchecked(entry);
             Ok(())
         } else {
@@ -394,14 +457,19 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// will be valid for the entire duration of the operation, otherwise it may cause memory
     /// problems.
     #[inline]
+    #[track_caller]
     pub unsafe fn push_multiple(&self, entries: &[E]) -> Result<(), PushError> {
-        if self.capacity() - self.len() < entries.len() {
+        self.queue.debug_assert_not_pushing();
+        if !self.has_space(entries.len()) {
             return Err(PushError);
         }
 
+        let mut tail = self.queue.local_tail.get();
         for entry in entries {
-            self.push_unchecked(entry);
+            *self.queue.sqes.add((tail & self.queue.ring_mask) as usize) = entry.clone();
+            tail = tail.wrapping_add(1);
         }
+        self.queue.local_tail.set(tail);
 
         Ok(())
     }
@@ -612,5 +680,37 @@ impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
             pos = pos.wrapping_add(1);
         }
         d.finish()
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use crate::{opcode, IoUring};
+
+    #[test]
+    #[should_panic(expected = "push from within a `push_inline` closure")]
+    fn push_inline_reentrant_push_panics() {
+        let ring = IoUring::new(4).unwrap();
+        let sq = ring.submission();
+        unsafe {
+            let _ = sq.push_inline(|e| {
+                *e = opcode::Nop::new().build();
+                let _ = sq.push(&opcode::Nop::new().build());
+            });
+        }
+    }
+
+    #[test]
+    fn push_inline_guard_reset_after_panic() {
+        let ring = IoUring::new(4).unwrap();
+        let sq = ring.submission();
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            let _ = sq.push_inline(|_| panic!("boom"));
+        }));
+        assert!(res.is_err());
+        unsafe {
+            sq.push_inline(|e| *e = opcode::Nop::new().build()).unwrap();
+            sq.push(&opcode::Nop::new().build()).unwrap();
+        }
     }
 }
