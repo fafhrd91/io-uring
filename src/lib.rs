@@ -298,6 +298,19 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         self.sq.borrow()
     }
 
+    /// Get the submission queue of the io_uring instance without synchronizing it with the
+    /// kernel.
+    ///
+    /// Cheaper than [`submission`](Self::submission) when called for every pushed entry, it
+    /// neither publishes the tail nor loads the head. Pushed entries become visible to the kernel
+    /// on [`SubmissionQueue::sync`] or on submission. The queue length may be stale and
+    /// overestimate the number of queued entries, pushes synchronize with the kernel if the queue
+    /// looks full.
+    #[inline]
+    pub fn submission_unsynced(&self) -> SubmissionQueue<'_, S> {
+        self.sq.borrow()
+    }
+
     /// Get the submission queue of the io_uring instance from a shared reference.
     ///
     /// Equivalent to [`submission`](Self::submission). Queue state is shared, so multiple

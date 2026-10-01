@@ -2,6 +2,12 @@
 
 ## [0.7.150] - Unreleased
 
+* Add `IoUring::submission_unsynced()`, returns the submission queue without
+  synchronizing it with the kernel
+
+* Add `SubmissionQueue::try_push_inline()`, returns the closure if the queue
+  is full
+
 * Breaking: `IoUring` is no longer `Send` or `Sync`, the ring uses unsynchronized
   local state and is not safe to use from multiple threads
 

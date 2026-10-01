@@ -405,6 +405,23 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     where
         F: FnOnce(&mut E),
     {
+        self.try_push_inline(f).map_err(|_| PushError)
+    }
+
+    /// Attempts to push an entry into the queue, initializing it in place with `f`.
+    /// The entry passed to `f` is zeroed.
+    /// If the queue is full, `f` is returned without being called, so the caller can
+    /// initialize the entry elsewhere without checking for space beforehand.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`push_inline`](Self::push_inline).
+    #[inline]
+    #[track_caller]
+    pub unsafe fn try_push_inline<F>(&self, f: F) -> Result<(), F>
+    where
+        F: FnOnce(&mut E),
+    {
         self.queue.debug_assert_not_pushing();
         if self.has_space(1) {
             #[cfg(debug_assertions)]
@@ -425,7 +442,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
                 .set(self.queue.local_tail.get().wrapping_add(1));
             Ok(())
         } else {
-            Err(PushError)
+            Err(f)
         }
     }
 
@@ -711,6 +728,40 @@ mod tests {
         unsafe {
             sq.push_inline(|e| *e = opcode::Nop::new().build()).unwrap();
             sq.push(&opcode::Nop::new().build()).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod push_tests {
+    use crate::{opcode, IoUring};
+
+    #[test]
+    fn try_push_inline_unsynced() {
+        let ring = IoUring::new(2).unwrap();
+        let sq = ring.submission_unsynced();
+        unsafe {
+            for _ in 0..sq.capacity() {
+                assert!(sq
+                    .try_push_inline(|e| *e = opcode::Nop::new().build())
+                    .is_ok());
+            }
+            let f = sq
+                .try_push_inline(|e| *e = opcode::Nop::new().build().user_data(7))
+                .unwrap_err();
+            assert!(sq.is_full());
+
+            // submission publishes the tail of the unsynced queue
+            assert_eq!(ring.submitter().submit_and_wait(2).unwrap(), 2);
+            // the stale head is synchronized by the push
+            assert!(sq.try_push_inline(f).is_ok());
+            assert_eq!(sq.len(), 1);
+            assert_eq!(ring.submitter().submit_and_wait(3).unwrap(), 1);
+
+            let mut cq = ring.completion_shared();
+            cq.sync();
+            let data: Vec<_> = cq.map(|e| e.user_data()).collect();
+            assert_eq!(data, [0, 0, 7]);
         }
     }
 }
