@@ -230,6 +230,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
             &self.params,
             self.sq.head,
             self.sq.tail,
+            &self.sq.local_tail,
             self.sq.flags,
         )
     }
@@ -256,9 +257,9 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// Get the submitter, submission queue and completion queue of the io_uring instance. This can
     /// be used to operate on the different parts of the io_uring instance independently.
     ///
-    /// If you use this method to obtain `sq` and `cq`,
-    /// please note that you need to `drop` or `sync` the queue before and after submit,
-    /// otherwise the queue will not be updated.
+    /// Entries pushed to `sq` are published to the kernel by the [`Submitter`] submit methods.
+    /// Call `sq.sync()` after submitting to reclaim consumed entries, and `cq.sync()` (or drop
+    /// `cq`) to observe new completions.
     #[inline]
     pub fn split(
         &mut self,
@@ -272,8 +273,10 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
             &self.params,
             self.sq.head,
             self.sq.tail,
+            &self.sq.local_tail,
             self.sq.flags,
         );
+        self.sq.sync();
         (submit, self.sq.borrow(), self.cq.borrow())
     }
 
@@ -281,6 +284,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// kernel.
     #[inline]
     pub fn submission(&self) -> SubmissionQueue<'_, S> {
+        self.sq.sync();
         self.sq.borrow()
     }
 
@@ -292,6 +296,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// No other [`SubmissionQueue`]s may exist when calling this function.
     #[inline]
     pub fn submission_shared(&self) -> SubmissionQueue<'_, S> {
+        self.sq.sync();
         self.sq.borrow()
     }
 

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic;
 use std::{io, mem, ptr};
@@ -56,6 +57,7 @@ pub struct Submitter<'a> {
 
     sq_head: *const atomic::AtomicU32,
     sq_tail: *const atomic::AtomicU32,
+    sq_local_tail: &'a Cell<u32>,
     sq_flags: *const atomic::AtomicU32,
 }
 
@@ -66,6 +68,7 @@ impl<'a> Submitter<'a> {
         params: &'a Parameters,
         sq_head: *const atomic::AtomicU32,
         sq_tail: *const atomic::AtomicU32,
+        sq_local_tail: &'a Cell<u32>,
         sq_flags: *const atomic::AtomicU32,
     ) -> Submitter<'a> {
         Submitter {
@@ -74,8 +77,15 @@ impl<'a> Submitter<'a> {
             enter_ring_fd: -1,
             sq_head,
             sq_tail,
+            sq_local_tail,
             sq_flags,
         }
+    }
+
+    /// Publish entries pushed to the submission queue, so they are visible to the kernel.
+    #[inline]
+    fn flush_sq(&self) {
+        unsafe { (*self.sq_tail).store(self.sq_local_tail.get(), atomic::Ordering::Release) }
     }
 
     #[inline]
@@ -169,6 +179,7 @@ impl<'a> Submitter<'a> {
     /// Submit all queued submission queue events to the kernel and wait for at least `want`
     /// completion events to complete.
     pub fn submit_and_wait(&self, want: usize) -> io::Result<usize> {
+        self.flush_sq();
         let len = self.sq_len();
         let mut flags = EnterFlags::empty();
 
@@ -226,6 +237,7 @@ impl<'a> Submitter<'a> {
         want: usize,
         args: &types::SubmitArgs<'_, '_>,
     ) -> io::Result<usize> {
+        self.flush_sq();
         let len = self.sq_len();
         let mut flags = EnterFlags::EXT_ARG;
 

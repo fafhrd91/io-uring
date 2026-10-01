@@ -1162,9 +1162,10 @@ opcode! {
     }
 
     pub fn build_into(self, entry: &mut Entry) {
-        let Send { fd, buf, len, flags, dest_addr, dest_addr_len } = self;
+        let Send { fd, buf, len, ioprio, flags, dest_addr, dest_addr_len } = self;
 
         let sqe = &mut entry.0;
+        sqe.ioprio = ioprio;
         sqe.opcode = Self::CODE;
         assign_fd!(sqe.fd = fd);
         sqe.__bindgen_anon_2.addr = buf as _;
