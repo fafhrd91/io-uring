@@ -19,6 +19,8 @@
 
 * `squeue::Entry::get_opcode()` returns `u8`
 
+* sys bindings regenerated from Linux 7.2 uapi headers
+
 * `Submitter::register_ifq()` takes `&mut io_uring_zcrx_ifq_reg`, the kernel writes
   results back into it
 
