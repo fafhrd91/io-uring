@@ -51,8 +51,8 @@ pub(crate) mod sealed {
 pub type RwFlags = u32;
 pub use sys::{
     IORING_MEM_REGION_TYPE_USER, IORING_ZCRX_AREA_SHIFT, IOU_PBUF_RING_INC, IOU_PBUF_RING_MMAP,
-    io_uring_region_desc, io_uring_zcrx_area_reg, io_uring_zcrx_cqe, io_uring_zcrx_ifq_reg,
-    io_uring_zcrx_rqe,
+    io_uring_attr_pi, io_uring_region_desc, io_uring_zcrx_area_reg, io_uring_zcrx_cqe,
+    io_uring_zcrx_ifq_reg, io_uring_zcrx_rqe,
 };
 
 // From linux/io_uring.h
@@ -119,6 +119,10 @@ bitflags! {
 
         /// Post a completion each time the timeout expires. Available since 6.4.
         const MULTISHOT = sys::IORING_TIMEOUT_MULTISHOT;
+
+        /// The timeout argument is the value in nanoseconds instead of a pointer to
+        /// a [`Timespec`], see [`Timeout::nanos`](crate::opcode::Timeout::nanos). Available since 7.1.
+        const IMMEDIATE_ARG = sys::IORING_TIMEOUT_IMMEDIATE_ARG;
     }
 }
 
@@ -160,6 +164,16 @@ bitflags! {
         ///
         /// Available since 6.0
         const FD_FIXED = sys::IORING_ASYNC_CANCEL_FD_FIXED;
+
+        /// Match on user_data, together with fd or opcode.
+        ///
+        /// Available since 6.6
+        const USERDATA = sys::IORING_ASYNC_CANCEL_USERDATA;
+
+        /// Match based on the opcode of the original request.
+        ///
+        /// Available since 6.6
+        const OP = sys::IORING_ASYNC_CANCEL_OP;
     }
 }
 
@@ -599,7 +613,7 @@ impl<'buf> RecvMsgOut<'buf> {
 /// [CancelBuilder] constructs match criteria for request cancellation.
 ///
 /// The [CancelBuilder] can be used to selectively cancel one or more requests
-/// by user_data, fd, fixed fd, or unconditionally.
+/// by user_data, fd, fixed fd, opcode, a combination of them, or unconditionally.
 ///
 /// ### Examples
 ///
@@ -620,12 +634,18 @@ impl<'buf> RecvMsgOut<'buf> {
 ///
 /// // Match all in-flight requests with user_data = 42.
 /// CancelBuilder::user_data(42).all();
+///
+/// // Match all in-flight reads on fd = 42.
+/// CancelBuilder::fd(Fd(42))
+///     .match_opcode(ntex_io_uring::opcode::Read::CODE)
+///     .all();
 /// ```
 #[derive(Debug)]
 pub struct CancelBuilder {
     pub(crate) flags: AsyncCancelFlags,
     pub(crate) user_data: Option<u64>,
     pub(crate) fd: Option<sealed::Target>,
+    pub(crate) opcode: u8,
 }
 
 impl CancelBuilder {
@@ -639,6 +659,7 @@ impl CancelBuilder {
             flags: AsyncCancelFlags::ANY,
             user_data: None,
             fd: None,
+            opcode: 0,
         }
     }
 
@@ -653,6 +674,7 @@ impl CancelBuilder {
             flags: AsyncCancelFlags::empty(),
             user_data: Some(user_data),
             fd: None,
+            opcode: 0,
         }
     }
 
@@ -664,16 +686,63 @@ impl CancelBuilder {
     ///
     /// FD async cancellation is only available since 5.19.
     pub fn fd(fd: impl sealed::UseFixed) -> Self {
-        let mut flags = AsyncCancelFlags::FD;
-        let target = fd.into();
-        if matches!(target, sealed::Target::Fixed(_)) {
-            flags.insert(AsyncCancelFlags::FD_FIXED);
-        }
         Self {
-            flags,
+            flags: AsyncCancelFlags::empty(),
             user_data: None,
-            fd: Some(target),
+            fd: None,
+            opcode: 0,
         }
+        .match_fd(fd)
+    }
+
+    /// Create a new [CancelBuilder] which will match in-flight requests with
+    /// the given `opcode`, for example [`Read::CODE`](crate::opcode::Read::CODE).
+    ///
+    /// The first request with the given opcode will be canceled. [CancelBuilder::all](#method.all)
+    /// can be called to instead match every request with the provided opcode.
+    ///
+    /// Opcode async cancellation is only available since 6.6.
+    pub const fn opcode(opcode: u8) -> Self {
+        Self {
+            flags: AsyncCancelFlags::OP,
+            user_data: None,
+            fd: None,
+            opcode,
+        }
+    }
+
+    /// Additionally require requests to have the given `user_data` value.
+    ///
+    /// Combining `user_data` with fd or opcode matching is only available since 6.6.
+    /// Ignored when combined with [CancelBuilder::any](#method.any).
+    pub fn match_user_data(mut self, user_data: u64) -> Self {
+        self.user_data = Some(user_data);
+        self
+    }
+
+    /// Additionally require requests to use the given `fd`.
+    ///
+    /// Combining fd with `user_data` or opcode matching is only available since 6.6.
+    /// The kernel rejects this criteria with [CancelBuilder::any](#method.any).
+    pub fn match_fd(mut self, fd: impl sealed::UseFixed) -> Self {
+        let target = fd.into();
+        self.flags.insert(AsyncCancelFlags::FD);
+        self.flags.set(
+            AsyncCancelFlags::FD_FIXED,
+            matches!(target, sealed::Target::Fixed(_)),
+        );
+        self.fd = Some(target);
+        self
+    }
+
+    /// Additionally require requests to have the given `opcode`.
+    ///
+    /// Opcode async cancellation is only available since 6.6.
+    /// The kernel rejects this criteria with [CancelBuilder::any](#method.any).
+    pub fn match_opcode(mut self, opcode: u8) -> Self {
+        self.flags.insert(AsyncCancelFlags::OP);
+        self.opcode = opcode;
+        self
     }
 
     /// Modify the [CancelBuilder] match criteria to match all in-flight requests
@@ -685,6 +754,19 @@ impl CancelBuilder {
     pub fn all(mut self) -> Self {
         self.flags.insert(AsyncCancelFlags::ALL);
         self
+    }
+
+    /// Cancel flags as passed to the kernel.
+    ///
+    /// `user_data` is matched implicitly unless fd or opcode matching is used,
+    /// then it requires the `USERDATA` flag.
+    pub(crate) fn to_flags(&self) -> u32 {
+        let mut flags = self.flags;
+        if self.user_data.is_some() && flags.intersects(AsyncCancelFlags::FD | AsyncCancelFlags::OP)
+        {
+            flags.insert(AsyncCancelFlags::USERDATA);
+        }
+        flags.bits()
     }
 
     pub(crate) fn to_fd(&self) -> i32 {
@@ -866,5 +948,42 @@ mod tests {
             cb.flags,
             AsyncCancelFlags::FD | AsyncCancelFlags::FD_FIXED | AsyncCancelFlags::ALL
         );
+    }
+
+    #[test]
+    fn test_cancel_builder_combined() {
+        let cb = CancelBuilder::user_data(42);
+        assert_eq!(cb.to_flags(), 0);
+
+        let cb = CancelBuilder::opcode(7);
+        assert_eq!(cb.to_flags(), sys::IORING_ASYNC_CANCEL_OP);
+        assert_eq!(cb.opcode, 7);
+        assert_eq!(cb.to_fd(), -1);
+
+        let cb = CancelBuilder::opcode(7).match_user_data(42).all();
+        assert_eq!(
+            cb.to_flags(),
+            sys::IORING_ASYNC_CANCEL_OP
+                | sys::IORING_ASYNC_CANCEL_USERDATA
+                | sys::IORING_ASYNC_CANCEL_ALL
+        );
+        assert_eq!(cb.user_data, Some(42));
+
+        let cb = CancelBuilder::user_data(42).match_fd(Fixed(3));
+        assert_eq!(
+            cb.to_flags(),
+            sys::IORING_ASYNC_CANCEL_FD
+                | sys::IORING_ASYNC_CANCEL_FD_FIXED
+                | sys::IORING_ASYNC_CANCEL_USERDATA
+        );
+        assert_eq!(cb.to_fd(), 3);
+
+        let cb = CancelBuilder::fd(Fixed(3)).match_fd(Fd(5)).match_opcode(9);
+        assert_eq!(
+            cb.to_flags(),
+            sys::IORING_ASYNC_CANCEL_FD | sys::IORING_ASYNC_CANCEL_OP
+        );
+        assert_eq!(cb.to_fd(), 5);
+        assert_eq!(cb.opcode, 9);
     }
 }

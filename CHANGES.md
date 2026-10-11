@@ -43,6 +43,23 @@
 
 * Fix `opcode::ReadMulti` clearing `FIXED_FILE` for fixed file descriptors
 
+* `Timeout`, `LinkTimeout` and `TimeoutUpdate` `flags()` OR flags, `PollAdd::multi()`
+  keeps other poll flags
+
+* `MsgRingData` and `MsgRingSendFd` accept a fixed (registered) ring fd
+
+* `CancelBuilder` can match by opcode and combine user_data, fd and opcode
+  criteria: `CancelBuilder::opcode()`, `match_user_data()`, `match_fd()`, `match_opcode()`
+
+* Add missing op setters: `Nop` `inject_result()`, `file()`, `buf_index()`,
+  `task_work()`, `cqe32()`; `PollAdd::level()`; `nanos()` and
+  `TimeoutFlags::IMMEDIATE_ARG` for timeouts; `ioprio()` for `Accept`,
+  `AcceptMulti`, `RecvMulti`, `SendBundle`, `RecvBundle`, `RecvMultiBundle`;
+  `AcceptMulti::addr()`; `len()` for `RecvBundle` and `RecvMultiBundle`;
+  `total_len()` for `RecvMulti` and `RecvMultiBundle`; `buf_index()` for `Send`,
+  `Recv` and `SendMsgZc`; `vectorized()` for `Send` and `SendZc`; `pi_attr()` for
+  read/write ops; `flags()` for `UringCmd16` and `UringCmd80`. Export `types::io_uring_attr_pi`
+
 ## [0.7.150] - Unreleased
 
 * Add `IoUring::submission_unsynced()`, returns the submission queue without

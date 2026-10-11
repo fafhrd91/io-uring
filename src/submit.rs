@@ -888,7 +888,7 @@ impl<'a> Submitter<'a> {
             tv_nsec: -1,
         });
         let user_data = builder.user_data.unwrap_or(0);
-        let flags = builder.flags.bits();
+        let flags = builder.to_flags();
         let fd = builder.to_fd();
 
         let arg = sys::io_uring_sync_cancel_reg {
@@ -896,6 +896,7 @@ impl<'a> Submitter<'a> {
             fd,
             flags,
             timeout: timespec,
+            opcode: builder.opcode,
             ..Default::default()
         };
 

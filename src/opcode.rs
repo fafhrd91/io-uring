@@ -127,6 +127,51 @@ opcode! {
     fn new(sqe) {
         sqe.fd = -1;
     }
+
+    /// Complete with `result` instead of `0`. Available since 6.10.
+    fn inject_result(sqe, result: i32) {
+        sqe.len = result as u32;
+        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_INJECT_RESULT };
+    }
+
+    /// Look up `fd` when the request is issued, completing with `-EBADF` if it is not valid.
+    /// Available since 6.13.
+    fn file(sqe, fd: impl sealed::UseFixed) {
+        let flags = match sealed::UseFixed::into(fd) {
+            sealed::Target::Fd(fd) => {
+                sqe.fd = fd;
+                sys::IORING_NOP_FILE
+            }
+            sealed::Target::Fixed(idx) => {
+                sqe.fd = idx as _;
+                sys::IORING_NOP_FILE | sys::IORING_NOP_FIXED_FILE
+            }
+        };
+        unsafe { sqe.__bindgen_anon_3.nop_flags |= flags };
+    }
+
+    /// Look up the registered buffer `buf_index` when the request is issued, completing
+    /// with `-EFAULT` if it is not valid. Available since 6.13.
+    fn buf_index(sqe, buf_index: u16) {
+        sqe.__bindgen_anon_4.buf_index = buf_index;
+        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_FIXED_BUFFER };
+    }
+
+    /// Complete the request through task work. Available since 6.17.
+    fn task_work(sqe) {
+        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_TW };
+    }
+
+    /// Post a 32-byte completion with `extra1` and `extra2` as its
+    /// [big CQE](crate::cqueue::Entry32::big_cqe) data.
+    ///
+    /// The ring must use [`cqueue::Entry32`](crate::cqueue::Entry32) completions, otherwise
+    /// the request fails with `-EINVAL`. Available since 6.18.
+    fn cqe32(sqe, extra1: u64, extra2: u64) {
+        sqe.__bindgen_anon_1.off = extra1;
+        sqe.__bindgen_anon_2.addr = extra2;
+        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_CQE32 };
+    }
 }
 
 opcode! {
@@ -163,6 +208,15 @@ opcode! {
         sqe.__bindgen_anon_4.buf_group = buf_group;
         sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
+    }
 }
 
 opcode! {
@@ -197,6 +251,15 @@ opcode! {
     /// Older kernels ignore this field.
     fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
+    }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
 }
 
@@ -270,6 +333,15 @@ opcode! {
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
+    }
 }
 
 opcode! {
@@ -307,6 +379,15 @@ opcode! {
     fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
     }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
+    }
 }
 
 opcode! {
@@ -342,7 +423,21 @@ opcode! {
     /// Issue a multishot poll, a CQE is posted for each event until the request
     /// is cancelled or fails. Available since 5.13.
     fn multi(sqe, multi: bool) {
-        sqe.len = if multi { sys::IORING_POLL_ADD_MULTI } else { 0 };
+        if multi {
+            sqe.len |= sys::IORING_POLL_ADD_MULTI;
+        } else {
+            sqe.len &= !sys::IORING_POLL_ADD_MULTI;
+        }
+    }
+
+    /// Use level triggered instead of edge triggered events for a [multishot](Self::multi)
+    /// poll. Available since 6.0.
+    fn level(sqe, level: bool) {
+        if level {
+            sqe.len |= sys::IORING_POLL_ADD_LEVEL;
+        } else {
+            sqe.len &= !sys::IORING_POLL_ADD_LEVEL;
+        }
     }
 }
 
@@ -505,9 +600,20 @@ opcode! {
         sqe.__bindgen_anon_1.off = count as _;
     }
 
-    /// Timeout flags, see [`types::TimeoutFlags`].
+    /// Timeout flags, see [`types::TimeoutFlags`]. ORed with already set flags.
     fn flags(sqe, flags: types::TimeoutFlags) {
-        sqe.__bindgen_anon_3.timeout_flags = flags.bits();
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= flags.bits() };
+    }
+
+    /// Use a timeout of `nanos` nanoseconds instead of the `timespec` passed to `new`,
+    /// which may then be null. `nanos` is relative unless
+    /// [`TimeoutFlags::ABS`](types::TimeoutFlags::ABS) is set and must not exceed `i64::MAX`.
+    ///
+    /// Sets [`TimeoutFlags::IMMEDIATE_ARG`](types::TimeoutFlags::IMMEDIATE_ARG).
+    /// Available since 7.1.
+    fn nanos(sqe, nanos: u64) {
+        sqe.__bindgen_anon_2.addr = nanos;
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= sys::IORING_TIMEOUT_IMMEDIATE_ARG };
     }
 }
 
@@ -535,9 +641,20 @@ opcode! {
         sqe.__bindgen_anon_3.timeout_flags = sys::IORING_TIMEOUT_UPDATE;
     }
 
-    /// Timeout flags, see [`types::TimeoutFlags`].
+    /// Timeout flags, see [`types::TimeoutFlags`]. ORed with already set flags.
     fn flags(sqe, flags: types::TimeoutFlags) {
-        sqe.__bindgen_anon_3.timeout_flags = flags.bits() | sys::IORING_TIMEOUT_UPDATE;
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= flags.bits() };
+    }
+
+    /// Use a timeout of `nanos` nanoseconds instead of the `timespec` passed to `new`,
+    /// which may then be null. `nanos` is relative unless
+    /// [`TimeoutFlags::ABS`](types::TimeoutFlags::ABS) is set and must not exceed `i64::MAX`.
+    ///
+    /// Sets [`TimeoutFlags::IMMEDIATE_ARG`](types::TimeoutFlags::IMMEDIATE_ARG).
+    /// Available since 7.1.
+    fn nanos(sqe, nanos: u64) {
+        sqe.__bindgen_anon_1.off = nanos;
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= sys::IORING_TIMEOUT_IMMEDIATE_ARG };
     }
 }
 
@@ -560,6 +677,15 @@ opcode! {
     /// Flags, as in the `flags` argument of `accept4(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
+    }
+
+    /// Accept flags (`IORING_ACCEPT_*`), ORed with already set bits.
+    ///
+    /// `IORING_ACCEPT_DONTWAIT` (2) fails with `-EAGAIN` instead of waiting for a connection,
+    /// `IORING_ACCEPT_POLL_FIRST` (4) waits for a connection before trying to accept.
+    /// Available since 6.10.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
     }
 }
 
@@ -613,9 +739,20 @@ opcode! {
         sqe.len = 1;
     }
 
-    /// Timeout flags, see [`types::TimeoutFlags`].
+    /// Timeout flags, see [`types::TimeoutFlags`]. ORed with already set flags.
     fn flags(sqe, flags: types::TimeoutFlags) {
-        sqe.__bindgen_anon_3.timeout_flags = flags.bits();
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= flags.bits() };
+    }
+
+    /// Use a timeout of `nanos` nanoseconds instead of the `timespec` passed to `new`,
+    /// which may then be null. `nanos` is relative unless
+    /// [`TimeoutFlags::ABS`](types::TimeoutFlags::ABS) is set and must not exceed `i64::MAX`.
+    ///
+    /// Sets [`TimeoutFlags::IMMEDIATE_ARG`](types::TimeoutFlags::IMMEDIATE_ARG).
+    /// Available since 7.1.
+    fn nanos(sqe, nanos: u64) {
+        sqe.__bindgen_anon_2.addr = nanos;
+        unsafe { sqe.__bindgen_anon_3.timeout_flags |= sys::IORING_TIMEOUT_IMMEDIATE_ARG };
     }
 }
 
@@ -785,6 +922,15 @@ opcode! {
         sqe.__bindgen_anon_4.buf_group = buf_group;
         sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
+    }
 }
 
 opcode! {
@@ -830,6 +976,15 @@ opcode! {
     /// Older kernels ignore this field.
     fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
+    }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
 }
 
@@ -905,6 +1060,24 @@ opcode! {
     fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
     }
+
+    /// Use the registered buffer `buf_index`, `buf` and `len` must fall within it.
+    ///
+    /// Sets `IORING_RECVSEND_FIXED_BUF`, not supported with [`vectorized`](Self::vectorized).
+    /// Available since 7.2.
+    fn buf_index(sqe, buf_index: Option<u16>) {
+        if let Some(buf_index) = buf_index {
+            sqe.__bindgen_anon_4.buf_index = buf_index;
+            sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
+        }
+    }
+
+    /// Treat `buf` as a pointer to an array of `len` [`libc::iovec`]s, like `sendmsg(2)`.
+    ///
+    /// Sets `IORING_SEND_VECTORIZED`. Available since 6.17.
+    fn vectorized(sqe) {
+        sqe.ioprio |= sys::IORING_SEND_VECTORIZED as u16;
+    }
 }
 
 opcode! {
@@ -934,6 +1107,17 @@ opcode! {
     fn buffer_select(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
         sqe.flags |= Flags::BUFFER_SELECT.bits();
+    }
+
+    /// Use the registered buffer `buf_index`, `buf` and `len` must fall within it.
+    ///
+    /// Sets `IORING_RECVSEND_FIXED_BUF`, not supported with [`buffer_select`](Self::buffer_select).
+    /// Available since 7.2.
+    fn buf_index(sqe, buf_index: Option<u16>) {
+        if let Some(buf_index) = buf_index {
+            sqe.__bindgen_anon_4.buf_index = buf_index;
+            sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
+        }
     }
 }
 
@@ -969,6 +1153,17 @@ opcode! {
     /// Maximum number of bytes to receive per completion, `0` uses the buffer size.
     fn len(sqe, len: u32) {
         sqe.len = len;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// Stop the multishot receive after `total_len` bytes, `0` means no limit.
+    /// Available since 6.17.
+    fn total_len(sqe, total_len: u32) {
+        sqe.__bindgen_anon_5.optlen = total_len;
     }
 }
 
@@ -1303,13 +1498,13 @@ opcode! {
 
     fn new(
         sqe,
-        ring_fd: impl sealed::UseFd,
+        ring_fd: impl sealed::UseFixed,
         result: i32,
         user_data: u64,
         user_flags: Option<u32>,
     ) {
         sqe.__bindgen_anon_2.addr = sys::IORING_MSG_DATA.into();
-        sqe.fd = sealed::UseFd::into(ring_fd);
+        assign_fd!(sqe, ring_fd);
         sqe.len = result as u32;
         sqe.__bindgen_anon_1.off = user_data;
         if let Some(flags) = user_flags {
@@ -1335,7 +1530,8 @@ opcode! {
     fn new(sqe, builder: types::CancelBuilder) {
         sqe.fd = builder.to_fd();
         sqe.__bindgen_anon_2.addr = builder.user_data.unwrap_or(0);
-        sqe.__bindgen_anon_3.cancel_flags = builder.flags.bits();
+        sqe.__bindgen_anon_3.cancel_flags = builder.to_flags();
+        sqe.len = builder.opcode.into();
     }
 }
 
@@ -1370,6 +1566,15 @@ opcode! {
         if let Some(addr) = addr {
             sqe.__bindgen_anon_2.addr = addr;
         }
+    }
+
+    /// `IORING_URING_CMD_*` flags, ORed with already set flags.
+    ///
+    /// `IORING_URING_CMD_MULTISHOT` (2, since 6.18) requires
+    /// [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT) and cannot be combined with
+    /// [`buf_index`](Self::buf_index).
+    fn flags(sqe, flags: u32) {
+        unsafe { sqe.__bindgen_anon_3.uring_cmd_flags |= flags };
     }
 }
 
@@ -1426,6 +1631,13 @@ impl<'a> UringCmd80<'a> {
                 .cast::<[u8; 16]>() = cmd1
         };
         self.cmd2.copy_from_slice(&cmd[16..]);
+        self
+    }
+
+    /// `IORING_URING_CMD_*` flags, ORed with already set flags, see [`UringCmd16::flags`].
+    #[inline]
+    pub fn flags(self, flags: u32) -> Self {
+        unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= flags };
         self
     }
 
@@ -1503,6 +1715,24 @@ opcode! {
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
     }
+
+    /// Store the peer address of each accepted connection in `addr`, as in `accept4(2)`.
+    ///
+    /// Every completion overwrites `addr` and `addrlen`, so read them before the next
+    /// completion is posted.
+    fn addr(sqe, addr: *mut libc::sockaddr, addrlen: *mut libc::socklen_t) {
+        sqe.__bindgen_anon_2.addr = addr as _;
+        sqe.__bindgen_anon_1.addr2 = addrlen as _;
+    }
+
+    /// Accept flags (`IORING_ACCEPT_*`), ORed with already set bits.
+    ///
+    /// `IORING_ACCEPT_DONTWAIT` (2) fails with `-EAGAIN` instead of waiting for a connection,
+    /// `IORING_ACCEPT_POLL_FIRST` (4) waits for a connection before trying to accept.
+    /// Available since 6.10.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
 }
 
 // === 6.0 ===
@@ -1513,13 +1743,13 @@ opcode! {
 
     fn new(
         sqe,
-        ring_fd: impl sealed::UseFd,
+        ring_fd: impl sealed::UseFixed,
         fixed_slot_src: types::Fixed,
         dest_slot_index: types::DestinationSlot,
         user_data: u64,
     ) {
         sqe.__bindgen_anon_2.addr = sys::IORING_MSG_SEND_FD.into();
-        sqe.fd = sealed::UseFd::into(ring_fd);
+        assign_fd!(sqe, ring_fd);
         sqe.__bindgen_anon_1.off = user_data;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = fixed_slot_src.0 as u64 };
         sqe.__bindgen_anon_5.file_index = dest_slot_index.kernel_index_arg();
@@ -1588,6 +1818,14 @@ opcode! {
     fn zc_flags(sqe, zc_flags: u16) {
         sqe.ioprio |= zc_flags;
     }
+
+    /// Treat `buf` as a pointer to an array of `len` [`libc::iovec`]s, like `sendmsg(2)`.
+    ///
+    /// With [`buf_index`](Self::buf_index) the iovecs must fall within the registered buffer.
+    /// Sets `IORING_SEND_VECTORIZED`. Available since 6.17.
+    fn vectorized(sqe) {
+        sqe.ioprio |= sys::IORING_SEND_VECTORIZED as u16;
+    }
 }
 
 // === 6.1 ===
@@ -1620,6 +1858,16 @@ opcode! {
     /// `MSG_*` flags, as in the `flags` argument of `sendmsg(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
+    }
+
+    /// Use the registered buffer `buf_index`, the iovecs of `msg` must fall within it.
+    ///
+    /// Sets `IORING_RECVSEND_FIXED_BUF`. Available since 6.15.
+    fn buf_index(sqe, buf_index: Option<u16>) {
+        if let Some(buf_index) = buf_index {
+            sqe.__bindgen_anon_4.buf_index = buf_index;
+            sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
+        }
     }
 }
 
@@ -1781,6 +2029,11 @@ opcode! {
     fn len(sqe, len: u32) {
         sqe.len = len;
     }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
 }
 
 opcode! {
@@ -1805,6 +2058,16 @@ opcode! {
     /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// Maximum number of bytes to receive per completion, `0` uses the buffer size.
+    fn len(sqe, len: u32) {
+        sqe.len = len;
     }
 }
 
@@ -1838,6 +2101,22 @@ opcode! {
     /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// Maximum number of bytes to receive per completion, `0` uses the buffer size.
+    fn len(sqe, len: u32) {
+        sqe.len = len;
+    }
+
+    /// Stop the multishot receive after `total_len` bytes, `0` means no limit.
+    /// Available since 6.17.
+    fn total_len(sqe, total_len: u32) {
+        sqe.__bindgen_anon_5.optlen = total_len;
     }
 }
 
@@ -1934,6 +2213,15 @@ opcode! {
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
+    }
 }
 
 opcode! {
@@ -1972,6 +2260,15 @@ opcode! {
     /// Older kernels ignore this field.
     fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
+    }
+
+    /// Attach protection information to the request, see [`types::io_uring_attr_pi`].
+    ///
+    /// `attr` must stay valid until the request is submitted. Available since 6.14.
+    fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
+        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        pi.attr_ptr = attr as u64;
+        pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
 }
 
@@ -2206,5 +2503,172 @@ mod tests {
         Nop::new(&mut entry).user_data(9);
         assert_eq!(entry.get_opcode(), Nop::CODE);
         assert_eq!(entry.get_user_data(), 9);
+    }
+
+    #[test]
+    fn nop_flags() {
+        let mut entry = Entry::default();
+        Nop::new(&mut entry)
+            .inject_result(-5)
+            .file(Fixed(7))
+            .buf_index(2)
+            .task_work()
+            .cqe32(10, 20);
+        let sqe = &entry.0;
+        assert_eq!(sqe.len as i32, -5);
+        assert_eq!(sqe.fd, 7);
+        assert_eq!(sqe.flags, 0);
+        assert_eq!(unsafe { sqe.__bindgen_anon_4.buf_index }, 2);
+        assert_eq!(unsafe { sqe.__bindgen_anon_1.off }, 10);
+        assert_eq!(unsafe { sqe.__bindgen_anon_2.addr }, 20);
+        assert_eq!(
+            unsafe { sqe.__bindgen_anon_3.nop_flags },
+            sys::IORING_NOP_INJECT_RESULT
+                | sys::IORING_NOP_FILE
+                | sys::IORING_NOP_FIXED_FILE
+                | sys::IORING_NOP_FIXED_BUFFER
+                | sys::IORING_NOP_TW
+                | sys::IORING_NOP_CQE32
+        );
+
+        Nop::new(&mut entry).file(Fd(3));
+        assert_eq!(entry.0.fd, 3);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.nop_flags },
+            sys::IORING_NOP_FILE
+        );
+    }
+
+    #[test]
+    fn poll_add_flags() {
+        let mut entry = Entry::default();
+        PollAdd::new(&mut entry, Fd(1), libc::POLLIN as _)
+            .level(true)
+            .multi(true);
+        assert_eq!(
+            entry.0.len,
+            sys::IORING_POLL_ADD_MULTI | sys::IORING_POLL_ADD_LEVEL
+        );
+        PollAdd::new(&mut entry, Fd(1), libc::POLLIN as _)
+            .multi(true)
+            .level(true)
+            .multi(false);
+        assert_eq!(entry.0.len, sys::IORING_POLL_ADD_LEVEL);
+    }
+
+    #[test]
+    fn timeout_nanos() {
+        let mut entry = Entry::default();
+        Timeout::new(&mut entry, std::ptr::null())
+            .nanos(1_000)
+            .flags(types::TimeoutFlags::ETIME_SUCCESS);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 1_000);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.timeout_flags },
+            sys::IORING_TIMEOUT_IMMEDIATE_ARG | sys::IORING_TIMEOUT_ETIME_SUCCESS
+        );
+
+        LinkTimeout::new(&mut entry, std::ptr::null()).nanos(5);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 5);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.timeout_flags },
+            sys::IORING_TIMEOUT_IMMEDIATE_ARG
+        );
+
+        TimeoutUpdate::new(&mut entry, 42, std::ptr::null())
+            .nanos(7)
+            .flags(types::TimeoutFlags::ABS);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 7);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 42);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.timeout_flags },
+            sys::IORING_TIMEOUT_UPDATE
+                | sys::IORING_TIMEOUT_IMMEDIATE_ARG
+                | sys::IORING_TIMEOUT_ABS
+        );
+    }
+
+    #[test]
+    fn send_recv_flags() {
+        let mut entry = Entry::default();
+        Send::new(&mut entry, Fd(1), std::ptr::null(), 2).vectorized();
+        assert_eq!(entry.0.ioprio, sys::IORING_SEND_VECTORIZED as u16);
+
+        Send::new(&mut entry, Fd(1), std::ptr::null(), 2).buf_index(Some(3));
+        assert_eq!(entry.0.ioprio, sys::IORING_RECVSEND_FIXED_BUF as u16);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_index }, 3);
+
+        Recv::new(&mut entry, Fd(1), std::ptr::null_mut(), 2).buf_index(Some(4));
+        assert_eq!(entry.0.ioprio, sys::IORING_RECVSEND_FIXED_BUF as u16);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_index }, 4);
+
+        RecvMultiBundle::new(&mut entry, Fd(1), 5)
+            .ioprio(sys::IORING_RECVSEND_POLL_FIRST as u16)
+            .len(100)
+            .total_len(1000);
+        assert_eq!(
+            entry.0.ioprio,
+            (sys::IORING_RECV_MULTISHOT
+                | sys::IORING_RECVSEND_BUNDLE
+                | sys::IORING_RECVSEND_POLL_FIRST) as u16
+        );
+        assert_eq!(entry.0.len, 100);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_5.optlen }, 1000);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_group }, 5);
+    }
+
+    #[test]
+    fn accept_multi_addr() {
+        let mut entry = Entry::default();
+        let addr = 0x1000 as *mut libc::sockaddr;
+        let addrlen = 0x2000 as *mut libc::socklen_t;
+        AcceptMulti::new(&mut entry, Fd(1))
+            .addr(addr, addrlen)
+            .ioprio(sys::IORING_ACCEPT_POLL_FIRST as u16);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 0x1000);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.addr2 }, 0x2000);
+        assert_eq!(
+            entry.0.ioprio,
+            (sys::IORING_ACCEPT_MULTISHOT | sys::IORING_ACCEPT_POLL_FIRST) as u16
+        );
+    }
+
+    #[test]
+    fn rw_pi_attr() {
+        let mut entry = Entry::default();
+        let attr = 0x3000 as *const types::io_uring_attr_pi;
+        Read::new(&mut entry, Fd(1), std::ptr::null_mut(), 0).pi_attr(attr);
+        let pi = unsafe { entry.0.__bindgen_anon_6.__bindgen_anon_2.as_ref() };
+        assert_eq!(pi.attr_ptr, 0x3000);
+        assert_eq!(pi.attr_type_mask, sys::IORING_RW_ATTR_FLAG_PI as u64);
+    }
+
+    #[test]
+    fn async_cancel_opcode() {
+        let mut entry = Entry::default();
+        let builder = types::CancelBuilder::fd(Fixed(3))
+            .match_opcode(Read::CODE)
+            .match_user_data(9)
+            .all();
+        AsyncCancel2::new(&mut entry, builder);
+        assert_eq!(entry.0.fd, 3);
+        assert_eq!(entry.0.len, Read::CODE as u32);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 9);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.cancel_flags },
+            sys::IORING_ASYNC_CANCEL_FD
+                | sys::IORING_ASYNC_CANCEL_FD_FIXED
+                | sys::IORING_ASYNC_CANCEL_OP
+                | sys::IORING_ASYNC_CANCEL_USERDATA
+                | sys::IORING_ASYNC_CANCEL_ALL
+        );
+    }
+
+    #[test]
+    fn msg_ring_fixed_fd() {
+        let mut entry = Entry::default();
+        MsgRingData::new(&mut entry, Fixed(2), 0, 1, None);
+        assert_eq!(entry.0.fd, 2);
+        assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
     }
 }
