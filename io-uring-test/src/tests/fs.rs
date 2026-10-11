@@ -48,20 +48,23 @@ pub fn test_file_write_stream<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // A nonzero write_stream on a buffered file is accepted by any kernel:
     // 6.16+ carries it down to the storage device, older kernels ignore it.
-    let write_e = opcode::Write::new(fd, text.as_ptr(), text.len() as _).write_stream(1);
-
-    let read_e = opcode::Read::new(fd, output.as_mut_ptr(), output.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let write_e = write_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&write_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&read_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::Write::new(entry, fd, text.as_ptr(), text.len() as _)
+                    .write_stream(1)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -77,25 +80,29 @@ pub fn test_file_write_stream<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     assert_eq!(&output[..cqes[1].result() as usize], text);
 
-    // And via Writev, which has its own build() path.
+    // And via Writev, which has its own write_stream path.
     let iov = ::libc::iovec {
         iov_base: text.as_ptr() as *mut _,
         iov_len: text.len(),
     };
-    let write_e = opcode::Writev::new(fd, &iov, 1).write_stream(1);
-
-    let read_e = opcode::Read::new(fd, output.as_mut_ptr(), output.len() as _);
 
     unsafe {
-        let mut queue = ring.submission();
-        let write_e = write_e
-            .build()
-            .user_data(0x03)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&write_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&read_e.build().user_data(0x04).into())
+            .push(|entry| {
+                opcode::Writev::new(entry, fd, &iov, 1)
+                    .write_stream(1)
+                    .user_data(0x03)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x04);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -150,24 +157,33 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Prepare multishot read
 
-    let sqe_read = opcode::ReadMulti::new(types::Fd(rx.as_raw_fd()), 0, 0xcafe)
-        .build()
-        .user_data(REQ_TYPE_READ)
-        .into();
-    unsafe { ring.submission().push(&sqe_read) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::ReadMulti::new(entry, types::Fd(rx.as_raw_fd()), 0, 0xcafe)
+                    .user_data(REQ_TYPE_READ);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // Write BYTES0
 
-    let sqe_write0 = opcode::Write::new(
-        types::Fd(tx.as_raw_fd()),
-        BYTES0.as_ptr(),
-        BYTES0.len() as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_WRITE_BYTES0)
-    .flags(squeue::Flags::IO_LINK)
-    .into();
-    unsafe { ring.submission().push(&sqe_write0) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Write::new(
+                    entry,
+                    types::Fd(tx.as_raw_fd()),
+                    BYTES0.as_ptr(),
+                    BYTES0.len() as _,
+                )
+                .user_data(REQ_TYPE_WRITE_BYTES0)
+                .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+    }
     ring.submit_and_wait(2)?;
 
     // Process one write/read pair. Fills the first buffer in the ring.
@@ -202,16 +218,21 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Write BYTES1
 
-    let sqe_write1 = opcode::Write::new(
-        types::Fd(tx.as_raw_fd()),
-        BYTES1.as_ptr(),
-        BYTES1.len() as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_WRITE_BYTES1)
-    .flags(squeue::Flags::IO_LINK)
-    .into();
-    unsafe { ring.submission().push(&sqe_write1) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Write::new(
+                    entry,
+                    types::Fd(tx.as_raw_fd()),
+                    BYTES1.as_ptr(),
+                    BYTES1.len() as _,
+                )
+                .user_data(REQ_TYPE_WRITE_BYTES1)
+                .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+    }
     ring.submit_and_wait(2)?;
 
     // Process one write/read pair. Fills the first buffer in the ring.
@@ -246,25 +267,35 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Write BYTES0 and BYTES1
 
-    let sqe_write0 = opcode::Write::new(
-        types::Fd(tx.as_raw_fd()),
-        BYTES0.as_ptr(),
-        BYTES0.len() as _,
-    )
-    .build()
-    .flags(squeue::Flags::IO_LINK)
-    .user_data(REQ_TYPE_WRITE_BYTES0)
-    .into();
-    let sqe_write1 = opcode::Write::new(
-        types::Fd(tx.as_raw_fd()),
-        BYTES1.as_ptr(),
-        BYTES1.len() as _,
-    )
-    .build()
-    .flags(squeue::Flags::IO_LINK)
-    .user_data(REQ_TYPE_WRITE_BYTES1)
-    .into();
-    unsafe { ring.submission().push_multiple(&[sqe_write0, sqe_write1]) }?;
+    unsafe {
+        let queue = ring.submission();
+        queue
+            .push(|entry| {
+                opcode::Write::new(
+                    entry,
+                    types::Fd(tx.as_raw_fd()),
+                    BYTES0.as_ptr(),
+                    BYTES0.len() as _,
+                )
+                .sqe_flags(squeue::Flags::IO_LINK)
+                .user_data(REQ_TYPE_WRITE_BYTES0);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Write::new(
+                    entry,
+                    types::Fd(tx.as_raw_fd()),
+                    BYTES1.as_ptr(),
+                    BYTES1.len() as _,
+                )
+                .sqe_flags(squeue::Flags::IO_LINK)
+                .user_data(REQ_TYPE_WRITE_BYTES1);
+            })
+            .ok()
+            .expect("queue is full");
+    }
     ring.submit_and_wait(4)?;
 
     // Process two write/read pairs. Fills the first and second buffer in the ring.
@@ -406,17 +437,19 @@ pub fn test_pipe_fixed_writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
         },
     ];
     unsafe {
-        ring.submission().push(
-            &opcode::WritevFixed::new(
-                types::Fd(tx.as_raw_fd()),
-                src_parts.as_ptr().cast(),
-                src_parts.len() as u32,
-                0,
-            )
-            .build()
-            .user_data(REQ_TYPE_WRITEV_FIXED)
-            .into(),
-        )?;
+        ring.submission()
+            .push(|entry| {
+                opcode::WritevFixed::new(
+                    entry,
+                    types::Fd(tx.as_raw_fd()),
+                    src_parts.as_ptr().cast(),
+                    src_parts.len() as u32,
+                    0,
+                )
+                .user_data(REQ_TYPE_WRITEV_FIXED);
+            })
+            .ok()
+            .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
     for cqe in ring.completion().map(Into::<cqueue::Entry>::into) {
@@ -437,17 +470,19 @@ pub fn test_pipe_fixed_writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
         },
     ];
     unsafe {
-        ring.submission().push(
-            &opcode::ReadvFixed::new(
-                types::Fd(rx.as_raw_fd()),
-                dst_parts.as_ptr().cast(),
-                dst_parts.len() as u32,
-                1,
-            )
-            .build()
-            .user_data(REQ_TYPE_READV_FIXED)
-            .into(),
-        )?;
+        ring.submission()
+            .push(|entry| {
+                opcode::ReadvFixed::new(
+                    entry,
+                    types::Fd(rx.as_raw_fd()),
+                    dst_parts.as_ptr().cast(),
+                    dst_parts.len() as u32,
+                    1,
+                )
+                .user_data(REQ_TYPE_READV_FIXED);
+            })
+            .ok()
+            .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
     for cqe in ring.completion().map(Into::<cqueue::Entry>::into) {
@@ -481,11 +516,12 @@ pub fn test_file_fsync<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let fd = types::Fd(fd.as_raw_fd());
 
-    let fsync_e = opcode::Fsync::new(fd);
-
     unsafe {
         ring.submission()
-            .push(&fsync_e.build().user_data(0x03).into())
+            .push(|entry| {
+                opcode::Fsync::new(entry, fd).user_data(0x03);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -519,11 +555,14 @@ pub fn test_file_fsync_file_range<S: squeue::EntryMarker, C: cqueue::EntryMarker
 
     let fd = types::Fd(fd.as_raw_fd());
 
-    let fsync_e = opcode::SyncFileRange::new(fd, 1024).offset(3 * 1024);
-
     unsafe {
         ring.submission()
-            .push(&fsync_e.build().user_data(0x04).into())
+            .push(|entry| {
+                opcode::SyncFileRange::new(entry, fd, 1024)
+                    .offset(3 * 1024)
+                    .user_data(0x04);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -557,11 +596,15 @@ pub fn test_file_fsync_range<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let fd = types::Fd(fd.as_raw_fd());
 
     // Sync a 1 KiB window starting at offset 3 KiB.
-    let fsync_e = opcode::Fsync::new(fd).offset(3 * 1024).len(1024);
-
     unsafe {
         ring.submission()
-            .push(&fsync_e.build().user_data(0x14).into())
+            .push(|entry| {
+                opcode::Fsync::new(entry, fd)
+                    .offset(3 * 1024)
+                    .len(1024)
+                    .user_data(0x14);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -590,11 +633,12 @@ pub fn test_file_fallocate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let fd = tempfile::tempfile()?;
     let fd = types::Fd(fd.as_raw_fd());
 
-    let falloc_e = opcode::Fallocate::new(fd, 1024);
-
     unsafe {
         ring.submission()
-            .push(&falloc_e.build().user_data(0x10).into())
+            .push(|entry| {
+                opcode::Fallocate::new(entry, fd, 1024).user_data(0x10);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -629,11 +673,13 @@ pub fn test_file_openat2<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let path = CString::new(path.as_os_str().as_bytes())?;
 
     let openhow = types::OpenHow::new().flags(libc::O_CREAT as _);
-    let open_e = opcode::OpenAt2::new(dirfd, path.as_ptr(), &openhow);
 
     unsafe {
         ring.submission()
-            .push(&open_e.build().user_data(0x11).into())
+            .push(|entry| {
+                opcode::OpenAt2::new(entry, dirfd, path.as_ptr(), &openhow).user_data(0x11);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -688,12 +734,14 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
 
         let file_index = types::DestinationSlot::auto_target();
 
-        let op = opcode::OpenAt2::new(dirfd, path.as_ptr(), &openhow);
-        let op = op.file_index(Some(file_index));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x11).into())
+                .push(|entry| {
+                    opcode::OpenAt2::new(entry, dirfd, path.as_ptr(), &openhow)
+                        .file_index(Some(file_index))
+                        .user_data(0x11);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -712,11 +760,12 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
 
     // Drop two.
     for round in 0..2 {
-        let op = opcode::Close::new(types::Fixed(round));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x12).into())
+                .push(|entry| {
+                    opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -746,12 +795,14 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
 
         let file_index = types::DestinationSlot::try_from_slot_target(round).unwrap();
 
-        let op = opcode::OpenAt2::new(dirfd, path.as_ptr(), &openhow);
-        let op = op.file_index(Some(file_index));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x11).into())
+                .push(|entry| {
+                    opcode::OpenAt2::new(entry, dirfd, path.as_ptr(), &openhow)
+                        .file_index(Some(file_index))
+                        .user_data(0x11);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -770,11 +821,12 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
 
     // Drop two.
     for round in 0..2 {
-        let op = opcode::Close::new(types::Fixed(round));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x12).into())
+                .push(|entry| {
+                    opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -826,13 +878,15 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
 
         let file_index = types::DestinationSlot::auto_target();
 
-        let op = opcode::OpenAt::new(dirfd, path.as_ptr());
-        let op = op.flags(libc::O_CREAT as _);
-        let op = op.file_index(Some(file_index));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x11).into())
+                .push(|entry| {
+                    opcode::OpenAt::new(entry, dirfd, path.as_ptr())
+                        .flags(libc::O_CREAT as _)
+                        .file_index(Some(file_index))
+                        .user_data(0x11);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -851,11 +905,12 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
 
     // Drop two.
     for round in 0..2 {
-        let op = opcode::Close::new(types::Fixed(round));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x12).into())
+                .push(|entry| {
+                    opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -882,13 +937,15 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
 
         let file_index = types::DestinationSlot::try_from_slot_target(round).unwrap();
 
-        let op = opcode::OpenAt::new(dirfd, path.as_ptr());
-        let op = op.flags(libc::O_CREAT as _);
-        let op = op.file_index(Some(file_index));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x11).into())
+                .push(|entry| {
+                    opcode::OpenAt::new(entry, dirfd, path.as_ptr())
+                        .flags(libc::O_CREAT as _)
+                        .file_index(Some(file_index))
+                        .user_data(0x11);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -907,11 +964,12 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
 
     // Drop two.
     for round in 0..2 {
-        let op = opcode::Close::new(types::Fixed(round));
-
         unsafe {
             ring.submission()
-                .push(&op.build().user_data(0x12).into())
+                .push(|entry| {
+                    opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
+                })
+                .ok()
                 .expect("queue is full");
         }
 
@@ -943,11 +1001,12 @@ pub fn test_file_close<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let fd = tempfile::tempfile()?;
     let fd = types::Fd(fd.into_raw_fd());
 
-    let close_e = opcode::Close::new(fd);
-
     unsafe {
         ring.submission()
-            .push(&close_e.build().user_data(0x12).into())
+            .push(|entry| {
+                opcode::Close::new(entry, fd).user_data(0x12);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -981,35 +1040,39 @@ pub fn test_file_cur_pos<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let text = b"The quick brown fox jumps over the lazy dog.";
     let mut output = vec![0; text.len()];
 
-    let write_e = opcode::Write::new(fd, text.as_ptr(), 22)
-        .offset(u64::MAX)
-        .build()
-        .user_data(0x01)
-        .into();
-
     unsafe {
-        ring.submission().push(&write_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Write::new(entry, fd, text.as_ptr(), 22)
+                    .offset(u64::MAX)
+                    .user_data(0x01);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
 
-    let write_e = opcode::Write::new(fd, unsafe { text.as_ptr().add(22) }, 22)
-        .offset(u64::MAX)
-        .build()
-        .user_data(0x02)
-        .into();
-
     unsafe {
-        ring.submission().push(&write_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Write::new(entry, fd, text.as_ptr().add(22), 22)
+                    .offset(u64::MAX)
+                    .user_data(0x02);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(2)?;
 
-    let read_e = opcode::Read::new(fd, output.as_mut_ptr(), output.len() as _);
-
     unsafe {
         ring.submission()
-            .push(&read_e.build().user_data(0x03).into())
+            .push(|entry| {
+                opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x03);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1049,18 +1112,20 @@ pub fn test_statx<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let mut statxbuf: libc::statx = unsafe { std::mem::zeroed() };
 
-    let statx_e = opcode::Statx::new(
-        types::Fd(libc::AT_FDCWD),
-        pathbuf.as_ptr(),
-        &mut statxbuf as *mut libc::statx as *mut _,
-    )
-    .mask(libc::STATX_ALL)
-    .build()
-    .user_data(0x99)
-    .into();
-
     unsafe {
-        ring.submission().push(&statx_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Statx::new(
+                    entry,
+                    types::Fd(libc::AT_FDCWD),
+                    pathbuf.as_ptr(),
+                    &mut statxbuf as *mut libc::statx as *mut _,
+                )
+                .mask(libc::STATX_ALL)
+                .user_data(0x99);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1090,19 +1155,21 @@ pub fn test_statx<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let fd = fs::File::open(&path)?;
     let mut statxbuf3: libc::statx = unsafe { std::mem::zeroed() };
 
-    let statx_e = opcode::Statx::new(
-        types::Fd(fd.as_raw_fd()),
-        b"\0".as_ptr().cast(),
-        &mut statxbuf3 as *mut libc::statx as *mut _,
-    )
-    .flags(libc::AT_EMPTY_PATH)
-    .mask(libc::STATX_ALL)
-    .build()
-    .user_data(0x9a)
-    .into();
-
     unsafe {
-        ring.submission().push(&statx_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Statx::new(
+                    entry,
+                    types::Fd(fd.as_raw_fd()),
+                    b"\0".as_ptr().cast(),
+                    &mut statxbuf3 as *mut libc::statx as *mut _,
+                )
+                .flags(libc::AT_EMPTY_PATH)
+                .mask(libc::STATX_ALL)
+                .user_data(0x9a);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1150,12 +1217,12 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
     let input = Box::new(AlignedBuffer([0xf9; 4096]));
     let mut output = Box::new(AlignedBuffer([0x0; 4096]));
 
-    let write_e = opcode::Write::new(fd, input.0.as_ptr(), input.0.len() as _);
-    let read_e = opcode::Read::new(fd, output.0.as_mut_ptr(), output.0.len() as _);
-
     unsafe {
         ring.submission()
-            .push(&write_e.build().user_data(0x01).into())
+            .push(|entry| {
+                opcode::Write::new(entry, fd, input.0.as_ptr(), input.0.len() as _).user_data(0x01);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1163,7 +1230,11 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
 
     unsafe {
         ring.submission()
-            .push(&read_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::Read::new(entry, fd, output.0.as_mut_ptr(), output.0.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1185,11 +1256,13 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
     let mut buf = Box::new(AlignedBuffer([0; 4096]));
     let buf = &mut buf.0;
 
-    let read_e = opcode::Read::new(fd, buf[1..].as_mut_ptr(), buf[1..].len() as _);
-
     unsafe {
         ring.submission()
-            .push(&read_e.build().user_data(0x03).into())
+            .push(|entry| {
+                opcode::Read::new(entry, fd, buf[1..].as_mut_ptr(), buf[1..].len() as _)
+                    .user_data(0x03);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1236,17 +1309,20 @@ pub fn test_file_splice<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     fs::write(dir.join("io-uring-test-file-input"), input)?;
     let fd = fs::File::open(dir.join("io-uring-test-file-input"))?;
 
-    let splice_e = opcode::Splice::new(
-        types::Fd(fd.as_raw_fd()),
-        0,
-        types::Fd(pipe_in.as_raw_fd()),
-        -1,
-        1024,
-    );
-
     unsafe {
         ring.submission()
-            .push(&splice_e.build().user_data(0x33).into())
+            .push(|entry| {
+                opcode::Splice::new(
+                    entry,
+                    types::Fd(fd.as_raw_fd()),
+                    0,
+                    types::Fd(pipe_in.as_raw_fd()),
+                    -1,
+                    1024,
+                )
+                .user_data(0x33);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1286,11 +1362,13 @@ pub fn test_ftruncate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     fs::write(&file, input)?;
     let fd = fs::OpenOptions::new().write(true).open(&file)?;
     let fd = types::Fd(fd.as_raw_fd());
-    let ftruncate_e = opcode::Ftruncate::new(fd, 512);
 
     unsafe {
         ring.submission()
-            .push(&ftruncate_e.build().user_data(0x33).into())
+            .push(|entry| {
+                opcode::Ftruncate::new(entry, fd, 512).user_data(0x33);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1306,11 +1384,12 @@ pub fn test_ftruncate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         &input[..512]
     );
 
-    let ftruncate_e = opcode::Ftruncate::new(fd, 0);
-
     unsafe {
         ring.submission()
-            .push(&ftruncate_e.build().user_data(0x34).into())
+            .push(|entry| {
+                opcode::Ftruncate::new(entry, fd, 0).user_data(0x34);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1356,10 +1435,13 @@ pub fn test_fixed_fd_install<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring.submitter().register_files(&[fd.0])?;
     let fd = types::Fixed(0);
 
-    let read_e = opcode::Read::new(fd, output.as_mut_ptr(), output.len() as _);
     unsafe {
         ring.submission()
-            .push(&read_e.build().user_data(0x01).into())
+            .push(|entry| {
+                opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x01);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1370,11 +1452,12 @@ pub fn test_fixed_fd_install<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes[0].result(), 1024);
     assert_eq!(output, input);
 
-    let fixed_fd_install_e = opcode::FixedFdInstall::new(fd, 0);
-
     unsafe {
         ring.submission()
-            .push(&fixed_fd_install_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::FixedFdInstall::new(entry, fd, 0).user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1416,19 +1499,21 @@ pub fn test_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut buffer = vec![0u8; 128];
 
     // Set extended attribute
-    let setxattr_e = opcode::SetXattr::new(
-        attr_name.as_ptr(),
-        attr_value.as_ptr().cast(),
-        file_path_cstr.as_ptr().cast(),
-        attr_value.as_bytes().len() as u32,
-    )
-    .flags(0)
-    .build()
-    .user_data(0x01)
-    .into();
-
     unsafe {
-        ring.submission().push(&setxattr_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::SetXattr::new(
+                    entry,
+                    attr_name.as_ptr(),
+                    attr_value.as_ptr().cast(),
+                    file_path_cstr.as_ptr().cast(),
+                    attr_value.as_bytes().len() as u32,
+                )
+                .flags(0)
+                .user_data(0x01);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1439,18 +1524,20 @@ pub fn test_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes[0].result(), 0);
 
     // Get extended attribute
-    let getxattr_e = opcode::GetXattr::new(
-        attr_name.as_ptr(),
-        buffer.as_mut_ptr().cast(),
-        file_path_cstr.as_ptr().cast(),
-        buffer.len() as u32,
-    )
-    .build()
-    .user_data(0x02)
-    .into();
-
     unsafe {
-        ring.submission().push(&getxattr_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::GetXattr::new(
+                    entry,
+                    attr_name.as_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    file_path_cstr.as_ptr().cast(),
+                    buffer.len() as u32,
+                )
+                .user_data(0x02);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1486,19 +1573,21 @@ pub fn test_f_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut buffer = vec![0u8; 128];
 
     // Set extended attribute on file descriptor
-    let fsetxattr_e = opcode::FSetXattr::new(
-        fd,
-        attr_name.as_ptr(),
-        attr_value.as_ptr().cast(),
-        attr_value.as_bytes().len() as u32,
-    )
-    .flags(0)
-    .build()
-    .user_data(0x01)
-    .into();
-
     unsafe {
-        ring.submission().push(&fsetxattr_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::FSetXattr::new(
+                    entry,
+                    fd,
+                    attr_name.as_ptr(),
+                    attr_value.as_ptr().cast(),
+                    attr_value.as_bytes().len() as u32,
+                )
+                .flags(0)
+                .user_data(0x01);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1509,18 +1598,20 @@ pub fn test_f_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes[0].result(), 0);
 
     // Get extended attribute from file descriptor
-    let fgetxattr_e = opcode::FGetXattr::new(
-        fd,
-        attr_name.as_ptr(),
-        buffer.as_mut_ptr().cast(),
-        buffer.len() as u32,
-    )
-    .build()
-    .user_data(0x02)
-    .into();
-
     unsafe {
-        ring.submission().push(&fgetxattr_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::FGetXattr::new(
+                    entry,
+                    fd,
+                    attr_name.as_ptr(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as u32,
+                )
+                .user_data(0x02);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;

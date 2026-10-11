@@ -23,11 +23,15 @@ pub fn test_pipe<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut fds = [-1, -1];
 
     // Submit pipe op.
-    let sqe = opcode::Pipe::new(fds.as_mut_ptr())
-        .build()
-        .user_data(REQ_TYPE_PIPE)
-        .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    let fds_ptr = fds.as_mut_ptr();
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Pipe::new(entry, fds_ptr).user_data(REQ_TYPE_PIPE);
+            })
+            .ok()
+            .expect("queue is full");
+    }
     ring.submit_and_wait(1)?;
 
     // Process pipe op.

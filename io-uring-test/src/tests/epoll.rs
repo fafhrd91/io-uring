@@ -42,15 +42,20 @@ pub fn test_ready<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // submit epoll_wait
 
-    let sqe = opcode::EpollWait::new(
-        types::Fd(epfd.as_raw_fd()),
-        events.as_mut_ptr().cast(),
-        NPIPES as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_EPOLL_WAIT)
-    .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::EpollWait::new(
+                    entry,
+                    types::Fd(epfd.as_raw_fd()),
+                    events.as_mut_ptr().cast(),
+                    NPIPES as _,
+                )
+                .user_data(REQ_TYPE_EPOLL_WAIT);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // process completions
 
@@ -91,15 +96,20 @@ pub fn test_not_ready<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // submit epoll_wait
 
-    let sqe = opcode::EpollWait::new(
-        types::Fd(epfd.as_raw_fd()),
-        events.as_mut_ptr().cast(),
-        NPIPES as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_EPOLL_WAIT)
-    .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::EpollWait::new(
+                    entry,
+                    types::Fd(epfd.as_raw_fd()),
+                    events.as_mut_ptr().cast(),
+                    NPIPES as _,
+                )
+                .user_data(REQ_TYPE_EPOLL_WAIT);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // write
 
@@ -146,15 +156,20 @@ pub fn test_delete<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // submit epoll_wait
 
-    let sqe = opcode::EpollWait::new(
-        types::Fd(epfd.as_raw_fd()),
-        events.as_mut_ptr().cast(),
-        NPIPES as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_EPOLL_WAIT)
-    .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::EpollWait::new(
+                    entry,
+                    types::Fd(epfd.as_raw_fd()),
+                    events.as_mut_ptr().cast(),
+                    NPIPES as _,
+                )
+                .user_data(REQ_TYPE_EPOLL_WAIT);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // delete event 0
 
@@ -234,15 +249,20 @@ pub fn test_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // submit epoll_wait
 
-    let sqe = opcode::EpollWait::new(
-        types::Fd(epfd.as_raw_fd()),
-        events.as_mut_ptr().cast(),
-        NPIPES as _,
-    )
-    .build()
-    .user_data(REQ_TYPE_EPOLL_WAIT)
-    .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    unsafe {
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::EpollWait::new(
+                    entry,
+                    types::Fd(epfd.as_raw_fd()),
+                    events.as_mut_ptr().cast(),
+                    NPIPES as _,
+                )
+                .user_data(REQ_TYPE_EPOLL_WAIT);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // force close `epfd` before processing
 
@@ -330,15 +350,20 @@ pub fn test_race<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
         // repeatedly submit epoll_wait and process completions
         for _ in 0..LOOPS {
-            let sqe = opcode::EpollWait::new(
-                types::Fd(efd.as_raw_fd()),
-                events.as_mut_ptr().cast(),
-                NPIPES as _,
-            )
-            .build()
-            .user_data(REQ_TYPE_EPOLL_WAIT)
-            .into();
-            unsafe { ring.submission().push(&sqe) }?;
+            unsafe {
+                ring.submission()
+                    .push(|entry: &mut S| {
+                        opcode::EpollWait::new(
+                            entry,
+                            types::Fd(efd.as_raw_fd()),
+                            events.as_mut_ptr().cast(),
+                            NPIPES as _,
+                        )
+                        .user_data(REQ_TYPE_EPOLL_WAIT);
+                    })
+                    .ok()
+                    .expect("queue is full");
+            }
 
             ring.submit_and_wait(1)?;
             let cqe = ring

@@ -88,19 +88,22 @@ pub fn test_tcp_send_recv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let text = b"The quick brown fox jumps over the lazy dog.";
     let mut output = vec![0; text.len()];
 
-    let send_e = opcode::Send::new(send_fd, text.as_ptr(), text.len() as _);
-    let recv_e = opcode::Recv::new(recv_fd, output.as_mut_ptr(), output.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let send_e = send_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&send_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&recv_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::Send::new(entry, send_fd, text.as_ptr(), text.len() as _)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -155,12 +158,13 @@ pub fn test_tcp_send_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         );
     }
 
-    let send_e = opcode::SendBundle::new(send_fd, 0xdead);
-
     unsafe {
-        let mut queue = ring.submission();
-        let send_e = send_e.build().user_data(0x01).into();
-        queue.push(&send_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::SendBundle::new(entry, send_fd, 0xdead).user_data(0x01);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -203,19 +207,22 @@ pub fn test_tcp_zero_copy_send_recv<S: squeue::EntryMarker, C: cqueue::EntryMark
     let text = b"The quick brown fox jumps over the lazy dog.";
     let mut output = vec![0; text.len()];
 
-    let send_e = opcode::SendZc::new(send_fd, text.as_ptr(), text.len() as _);
-    let recv_e = opcode::Recv::new(recv_fd, output.as_mut_ptr(), output.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let send_e = send_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&send_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&recv_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::SendZc::new(entry, send_fd, text.as_ptr(), text.len() as _)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -285,20 +292,24 @@ pub fn test_tcp_zero_copy_send_fixed<S: squeue::EntryMarker, C: cqueue::EntryMar
 
     // Here, send data from the seventh position of the registered buffer.
     buf0[7..(text_len + 7)].copy_from_slice(&text[..]);
-    let send_e = opcode::SendZc::new(send_fd, buf0[7..].as_ptr(), text_len as _).buf_index(Some(0));
-
-    let recv_e = opcode::Recv::new(recv_fd, output.as_mut_ptr(), output.len() as _);
 
     unsafe {
-        let mut queue = ring.submission();
-        let send_e = send_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&send_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&recv_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::SendZc::new(entry, send_fd, buf0[7..].as_ptr(), text_len as _)
+                    .buf_index(Some(0))
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -369,7 +380,7 @@ pub fn test_tcp_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         (*p).msg_iovlen = 1;
     }
 
-    let sendmsg_e = opcode::SendMsg::new(send_fd, msg.as_ptr());
+    let sendmsg_ptr = msg.as_ptr();
 
     // build recvmsg
     let mut msg = MaybeUninit::<libc::msghdr>::zeroed();
@@ -382,22 +393,24 @@ pub fn test_tcp_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         (*p).msg_iovlen = 1;
     }
 
-    let recvmsg_e = opcode::RecvMsg::new(recv_fd, msg.as_mut_ptr());
+    let recvmsg_ptr = msg.as_mut_ptr();
 
     // submit
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(
-                &sendmsg_e
-                    .build()
+            .push(|entry| {
+                opcode::SendMsg::new(entry, send_fd, sendmsg_ptr)
                     .user_data(0x01)
-                    .flags(squeue::Flags::IO_LINK)
-                    .into(),
-            )
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
             .expect("queue is full");
         queue
-            .push(&recvmsg_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::RecvMsg::new(entry, recv_fd, recvmsg_ptr).user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -454,7 +467,7 @@ pub fn test_tcp_zero_copy_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::Ent
         (*p).msg_iovlen = 1;
     }
 
-    let sendmsg_e = opcode::SendMsgZc::new(send_fd, msg.as_ptr());
+    let sendmsg_ptr = msg.as_ptr();
 
     // build recvmsg
     let mut msg = MaybeUninit::<libc::msghdr>::zeroed();
@@ -467,22 +480,24 @@ pub fn test_tcp_zero_copy_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::Ent
         (*p).msg_iovlen = 1;
     }
 
-    let recvmsg_e = opcode::RecvMsg::new(recv_fd, msg.as_mut_ptr());
+    let recvmsg_ptr = msg.as_mut_ptr();
 
     // submit
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(
-                &sendmsg_e
-                    .build()
+            .push(|entry| {
+                opcode::SendMsgZc::new(entry, send_fd, sendmsg_ptr)
                     .user_data(0x01)
-                    .flags(squeue::Flags::IO_LINK)
-                    .into(),
-            )
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
             .expect("queue is full");
         queue
-            .push(&recvmsg_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::RecvMsg::new(entry, recv_fd, recvmsg_ptr).user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -535,11 +550,12 @@ pub fn test_tcp_accept<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut sockaddr: libc::sockaddr = unsafe { mem::zeroed() };
     let mut addrlen: libc::socklen_t = mem::size_of::<libc::sockaddr>() as _;
 
-    let accept_e = opcode::Accept::new(fd, &mut sockaddr, &mut addrlen);
-
     unsafe {
         ring.submission()
-            .push(&accept_e.build().user_data(0x0e).into())
+            .push(|entry| {
+                opcode::Accept::new(entry, fd, &mut sockaddr, &mut addrlen).user_data(0x0e);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -588,12 +604,15 @@ pub fn test_tcp_accept_file_index<S: squeue::EntryMarker, C: cqueue::EntryMarker
     let mut addrlen: libc::socklen_t = mem::size_of::<libc::sockaddr>() as _;
 
     let dest_slot = types::DestinationSlot::try_from_slot_target(4).unwrap();
-    let accept_e = opcode::Accept::new(fd, &mut sockaddr, &mut addrlen);
-    let accept_e = accept_e.file_index(Some(dest_slot));
 
     unsafe {
         ring.submission()
-            .push(&accept_e.build().user_data(0x0e).into())
+            .push(|entry| {
+                opcode::Accept::new(entry, fd, &mut sockaddr, &mut addrlen)
+                    .file_index(Some(dest_slot))
+                    .user_data(0x0e);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -637,11 +656,12 @@ pub fn test_tcp_accept_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let _stream1 = TcpStream::connect(addr)?;
     let _stream2 = TcpStream::connect(addr)?;
 
-    let accept_e = opcode::AcceptMulti::new(fd);
-
     unsafe {
         ring.submission()
-            .push(&accept_e.build().user_data(2002).into())
+            .push(|entry| {
+                opcode::AcceptMulti::new(entry, fd).user_data(2002);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -664,11 +684,12 @@ pub fn test_tcp_accept_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Cancel the multishot accept
 
-    let cancel_e = opcode::AsyncCancel::new(2002);
-
     unsafe {
         ring.submission()
-            .push(&cancel_e.build().user_data(2003).into())
+            .push(|entry| {
+                opcode::AsyncCancel::new(entry, 2002).user_data(2003);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -720,11 +741,15 @@ pub fn test_tcp_accept_multi_file_index<S: squeue::EntryMarker, C: cqueue::Entry
     let _ = ring.submitter().unregister_files();
 
     ring.submitter().register_files_sparse(2).unwrap();
-    let accept_e = opcode::AcceptMulti::new(fd).allocate_file_index(true);
 
     unsafe {
         ring.submission()
-            .push(&accept_e.build().user_data(2002).into())
+            .push(|entry| {
+                opcode::AcceptMulti::new(entry, fd)
+                    .allocate_file_index(true)
+                    .user_data(2002);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -744,11 +769,12 @@ pub fn test_tcp_accept_multi_file_index<S: squeue::EntryMarker, C: cqueue::Entry
 
     // Cancel the multishot accept
 
-    let cancel_e = opcode::AsyncCancel::new(2002);
-
     unsafe {
         ring.submission()
-            .push(&cancel_e.build().user_data(2003).into())
+            .push(|entry| {
+                opcode::AsyncCancel::new(entry, 2002).user_data(2003);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -796,15 +822,20 @@ pub fn test_tcp_connect<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let sockaddr = SockAddr::from(addr);
     let stream = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
 
-    let connect_e = opcode::Connect::new(
-        types::Fd(stream.as_raw_fd()),
-        sockaddr.as_ptr() as *const _,
-        sockaddr.len(),
-    );
+    let connect_fd = types::Fd(stream.as_raw_fd());
 
     unsafe {
         ring.submission()
-            .push(&connect_e.build().user_data(0x0f).into())
+            .push(|entry| {
+                opcode::Connect::new(
+                    entry,
+                    connect_fd,
+                    sockaddr.as_ptr() as *const _,
+                    sockaddr.len(),
+                )
+                .user_data(0x0f);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -846,11 +877,13 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut bufs = vec![0; 1024];
 
     // provide bufs
-    let provide_bufs_e = opcode::ProvideBuffers::new(bufs.as_mut_ptr(), 1024, 1, 0xdead, 0);
-
     unsafe {
         ring.submission()
-            .push(&provide_bufs_e.build().user_data(0x21).into())
+            .push(|entry| {
+                opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 1, 0xdead, 0)
+                    .user_data(0x21);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -864,15 +897,16 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     send_stream.write_all(&input)?;
 
     // recv 1024
-    let recv_e = opcode::Recv::new(recv_fd, std::ptr::null_mut(), 1024)
-        .buf_group(0xdead)
-        .build()
-        .flags(squeue::Flags::BUFFER_SELECT)
-        .user_data(0x22)
-        .into();
-
     unsafe {
-        ring.submission().push(&recv_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
+                    .buf_group(0xdead)
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .user_data(0x22);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -884,15 +918,16 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(&bufs[..1024], &input[..1024]);
 
     // recv fail
-    let recv_e = opcode::Recv::new(recv_fd, std::ptr::null_mut(), 1024)
-        .buf_group(0xdead)
-        .build()
-        .flags(squeue::Flags::BUFFER_SELECT)
-        .user_data(0x23)
-        .into();
-
     unsafe {
-        ring.submission().push(&recv_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
+                    .buf_group(0xdead)
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .user_data(0x23);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -904,11 +939,13 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // provides two bufs, one of which we will use, one we will free
     let mut bufs = vec![0; 2 * 1024];
 
-    let provide_bufs_e = opcode::ProvideBuffers::new(bufs.as_mut_ptr(), 1024, 2, 0xdeae, 0);
-
     unsafe {
         ring.submission()
-            .push(&provide_bufs_e.build().user_data(0x24).into())
+            .push(|entry| {
+                opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 2, 0xdeae, 0)
+                    .user_data(0x24);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -919,15 +956,16 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // assert_eq!(cqe.result(), 0xdeae);
 
     // recv 2
-    let recv_e = opcode::Recv::new(recv_fd, std::ptr::null_mut(), 1024)
-        .buf_group(0xdeae)
-        .build()
-        .flags(squeue::Flags::BUFFER_SELECT)
-        .user_data(0x25)
-        .into();
-
     unsafe {
-        ring.submission().push(&recv_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
+                    .buf_group(0xdeae)
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .user_data(0x25);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -945,11 +983,12 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     }
 
     // remove one remaining buf
-    let remove_bufs_e = opcode::RemoveBuffers::new(1, 0xdeae);
-
     unsafe {
         ring.submission()
-            .push(&remove_bufs_e.build().user_data(0x26).into())
+            .push(|entry| {
+                opcode::RemoveBuffers::new(entry, 1, 0xdeae).user_data(0x26);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -960,11 +999,12 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqe.result(), 1);
 
     // remove bufs fail
-    let remove_bufs_e = opcode::RemoveBuffers::new(1, 0xdeaf);
-
     unsafe {
         ring.submission()
-            .push(&remove_bufs_e.build().user_data(0x27).into())
+            .push(|entry| {
+                opcode::RemoveBuffers::new(entry, 1, 0xdeaf).user_data(0x27);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1002,11 +1042,14 @@ pub fn test_tcp_buffer_select_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMa
 
     // provide two buffers for recvmsg
     let mut buf = [0u8; 2 * 1024];
-    let provide_bufs_e = opcode::ProvideBuffers::new(buf.as_mut_ptr(), 1024, 2, BGID, INPUT_BID);
 
     unsafe {
         ring.submission()
-            .push(&provide_bufs_e.build().user_data(0x26).into())
+            .push(|entry| {
+                opcode::ProvideBuffers::new(entry, buf.as_mut_ptr(), 1024, 2, BGID, INPUT_BID)
+                    .user_data(0x26);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1029,15 +1072,17 @@ pub fn test_tcp_buffer_select_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMa
     // N.B. This op will only support a BUFFER_SELECT when the msg.msg_iovlen is 1;
     // the kernel will return EINVAL for anything else. There would be no way of knowing
     // which other buffer IDs had been chosen.
-    let op = opcode::RecvMsg::new(recv_fd, &mut msg as *mut _)
-        .buf_group(BGID) // else result is -105, ENOBUFS, no buffer space available
-        .build()
-        .flags(squeue::Flags::BUFFER_SELECT) // else result is -14, EFAULT, bad address
-        .user_data(0x27);
-
     // Safety: the msghdr and the iovecs remain valid for length of the operation.
     unsafe {
-        ring.submission().push(&op.into()).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMsg::new(entry, recv_fd, &mut msg as *mut _)
+                    .buf_group(BGID) // else result is -105, ENOBUFS, no buffer space available
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT) // else result is -14, EFAULT
+                    .user_data(0x27);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1092,11 +1137,14 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
 
     // provide buf for readv
     let mut buf = [0u8; 512];
-    let provide_bufs_e = opcode::ProvideBuffers::new(buf.as_mut_ptr(), 512, 1, BGID, INPUT_BID);
 
     unsafe {
         ring.submission()
-            .push(&provide_bufs_e.build().user_data(0x29).into())
+            .push(|entry| {
+                opcode::ProvideBuffers::new(entry, buf.as_mut_ptr(), 512, 1, BGID, INPUT_BID)
+                    .user_data(0x29);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1117,15 +1165,17 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
     // readv
     // N.B. This op will only support a BUFFER_SELECT when the iovec length is 1,
     // the kernel should return EINVAL for anything else.
-    let op = opcode::Readv::new(recv_fd, &iovec, 1)
-        .buf_group(BGID)
-        .build()
-        .flags(squeue::Flags::BUFFER_SELECT)
-        .user_data(0x2a);
-
-    // Safety: The iovec addressed by the `op` remains live through the `submit_and_wait` call.
+    // Safety: The iovec addressed by the entry remains live through the `submit_and_wait` call.
     unsafe {
-        ring.submission().push(&op.into()).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Readv::new(entry, recv_fd, &iovec, 1)
+                    .buf_group(BGID)
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .user_data(0x2a);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1170,11 +1220,13 @@ pub fn test_tcp_recv_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let mut bufs = vec![0; 2 * 1024];
 
     // provide bufs
-    let provide_bufs_e = opcode::ProvideBuffers::new(bufs.as_mut_ptr(), 1024, 2, 0xdead, 0);
-
     unsafe {
         ring.submission()
-            .push(&provide_bufs_e.build().user_data(0x21).into())
+            .push(|entry| {
+                opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 2, 0xdead, 0)
+                    .user_data(0x21);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1189,14 +1241,15 @@ pub fn test_tcp_recv_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     send_stream.shutdown(Shutdown::Write)?;
 
     // multishot recv using a buf_group with 1024 length buffers
-    let recv_e = opcode::RecvMulti::new(recv_fd, 0xdead)
-        .len(640) // (1024 + 256) / 2 = 640
-        .build()
-        .user_data(0x22)
-        .into();
-
     unsafe {
-        ring.submission().push(&recv_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMulti::new(entry, recv_fd, 0xdead)
+                    .len(640) // (1024 + 256) / 2 = 640
+                    .user_data(0x22);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(3)?;
@@ -1262,13 +1315,13 @@ pub fn test_tcp_recv_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Multiple receive operations might be needed to receive everything.
     loop {
-        let recv_e = opcode::RecvBundle::new(recv_fd, 0xdeff)
-            .build()
-            .user_data(0x30)
-            .into();
-
         unsafe {
-            ring.submission().push(&recv_e).expect("queue is full");
+            ring.submission()
+                .push(|entry| {
+                    opcode::RecvBundle::new(entry, recv_fd, 0xdeff).user_data(0x30);
+                })
+                .ok()
+                .expect("queue is full");
         }
 
         ring.submit_and_wait(1)?;
@@ -1335,13 +1388,13 @@ pub fn test_tcp_recv_multi_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker
     send_stream.write_all(&input)?;
     send_stream.shutdown(Shutdown::Write)?;
 
-    let recv_e = opcode::RecvMultiBundle::new(recv_fd, 0xdebf)
-        .build()
-        .user_data(0x31)
-        .into();
-
     unsafe {
-        ring.submission().push(&recv_e).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMultiBundle::new(entry, recv_fd, 0xdebf).user_data(0x31);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -1426,11 +1479,12 @@ pub fn test_tcp_shutdown<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let listener = TCP_LISTENER.get_or_try_init(|| TcpListener::bind("127.0.0.1:0"))?;
     let sock_fd = types::Fd(listener.as_raw_fd());
 
-    let shutdown_e = opcode::Shutdown::new(sock_fd, SHUT_WR);
-
     unsafe {
         ring.submission()
-            .push(&shutdown_e.build().user_data(0x28).into())
+            .push(|entry| {
+                opcode::Shutdown::new(entry, sock_fd, SHUT_WR).user_data(0x28);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1443,11 +1497,13 @@ pub fn test_tcp_shutdown<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes[0].result(), 0);
 
     let text = b"C'est la vie";
-    let write_e = opcode::Write::new(sock_fd, text.as_ptr(), text.len() as _);
 
     unsafe {
         ring.submission()
-            .push(&write_e.build().into())
+            .push(|entry| {
+                opcode::Write::new(entry, sock_fd, text.as_ptr(), text.len() as _);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -1479,14 +1535,18 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let plain_socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
     let plain_fd = plain_socket.as_raw_fd();
 
-    let socket_fd_op = opcode::Socket::new(
-        Domain::IPV4.into(),
-        Type::DGRAM.into(),
-        Protocol::UDP.into(),
-    );
     unsafe {
         ring.submission()
-            .push(&socket_fd_op.build().user_data(42).into())
+            .push(|entry| {
+                opcode::Socket::new(
+                    entry,
+                    Domain::IPV4.into(),
+                    Type::DGRAM.into(),
+                    Protocol::UDP.into(),
+                )
+                .user_data(42);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1518,17 +1578,21 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
         // Set value.
         optval = 1;
-        let op = ntex_io_uring::opcode::SetSockOpt::new(
-            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
-            libc::SOL_SOCKET as u32,
-            libc::SO_REUSEADDR as u32,
-            &optval as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&optval) as libc::socklen_t,
-        )
-        .build()
-        .user_data(1234);
         unsafe {
-            ring.submission().push(&op.into()).expect("queue is full");
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::SetSockOpt::new(
+                        entry,
+                        ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+                        libc::SOL_SOCKET as u32,
+                        libc::SO_REUSEADDR as u32,
+                        &optval as *const _ as *const libc::c_void,
+                        std::mem::size_of_val(&optval) as libc::socklen_t,
+                    )
+                    .user_data(1234);
+                })
+                .ok()
+                .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
         let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
@@ -1560,21 +1624,20 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let _ = ring.submitter().unregister_files();
     ring.submitter().register_files_sparse(1).unwrap();
 
-    let fixed_socket_op = opcode::Socket::new(
-        Domain::IPV4.into(),
-        Type::DGRAM.into(),
-        Protocol::UDP.into(),
-    );
     let dest_slot = types::DestinationSlot::try_from_slot_target(0).unwrap();
     unsafe {
         ring.submission()
-            .push(
-                &fixed_socket_op
-                    .file_index(Some(dest_slot))
-                    .build()
-                    .user_data(55)
-                    .into(),
-            )
+            .push(|entry| {
+                opcode::Socket::new(
+                    entry,
+                    Domain::IPV4.into(),
+                    Type::DGRAM.into(),
+                    Protocol::UDP.into(),
+                )
+                .file_index(Some(dest_slot))
+                .user_data(55);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1611,14 +1674,18 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let plain_socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
     let plain_fd = plain_socket.as_raw_fd();
 
-    let socket_fd_op = opcode::Socket::new(
-        Domain::IPV4.into(),
-        Type::STREAM.into(),
-        Protocol::TCP.into(),
-    );
     unsafe {
         ring.submission()
-            .push(&socket_fd_op.build().user_data(42).into())
+            .push(|entry| {
+                opcode::Socket::new(
+                    entry,
+                    Domain::IPV4.into(),
+                    Type::STREAM.into(),
+                    Protocol::TCP.into(),
+                )
+                .user_data(42);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1635,15 +1702,19 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     {
         let server_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let server_addr: socket2::SockAddr = server_addr.into();
-        let op = ntex_io_uring::opcode::Bind::new(
-            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
-            server_addr.as_ptr() as *const _,
-            server_addr.len(),
-        )
-        .build()
-        .user_data(2345);
         unsafe {
-            ring.submission().push(&op.into()).expect("queue is full");
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::Bind::new(
+                        entry,
+                        ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+                        server_addr.as_ptr() as *const _,
+                        server_addr.len(),
+                    )
+                    .user_data(2345);
+                })
+                .ok()
+                .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
         let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
@@ -1665,14 +1736,18 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // Try to listen.
     {
-        let op = ntex_io_uring::opcode::Listen::new(
-            ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
-            128,
-        )
-        .build()
-        .user_data(3456);
         unsafe {
-            ring.submission().push(&op.into()).expect("queue is full");
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::Listen::new(
+                        entry,
+                        ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+                        128,
+                    )
+                    .user_data(3456);
+                })
+                .ok()
+                .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
         let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
@@ -1699,21 +1774,20 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let _ = ring.submitter().unregister_files();
     ring.submitter().register_files_sparse(1).unwrap();
 
-    let fixed_socket_op = opcode::Socket::new(
-        Domain::IPV4.into(),
-        Type::DGRAM.into(),
-        Protocol::UDP.into(),
-    );
     let dest_slot = types::DestinationSlot::try_from_slot_target(0).unwrap();
     unsafe {
         ring.submission()
-            .push(
-                &fixed_socket_op
-                    .file_index(Some(dest_slot))
-                    .build()
-                    .user_data(55)
-                    .into(),
-            )
+            .push(|entry| {
+                opcode::Socket::new(
+                    entry,
+                    Domain::IPV4.into(),
+                    Type::DGRAM.into(),
+                    Protocol::UDP.into(),
+                )
+                .file_index(Some(dest_slot))
+                .user_data(55);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1755,17 +1829,23 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     const SIZE: usize = 512;
     let mut buffers = [[0u8; SIZE]; 2];
     for (index, buf) in buffers.iter_mut().enumerate() {
-        let provide_bufs_e = ntex_io_uring::opcode::ProvideBuffers::new(
-            buf.as_mut_ptr(),
-            SIZE as i32,
-            1,
-            BUF_GROUP,
-            index as u16,
-        )
-        .build()
-        .user_data(11)
-        .into();
-        unsafe { ring.submission().push(&provide_bufs_e)? };
+        let buf_ptr = buf.as_mut_ptr();
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::ProvideBuffers::new(
+                        entry,
+                        buf_ptr,
+                        SIZE as i32,
+                        1,
+                        BUF_GROUP,
+                        index as u16,
+                    )
+                    .user_data(11);
+                })
+                .ok()
+                .expect("queue is full")
+        };
         ring.submitter().submit_and_wait(1)?;
         let cqes: Vec<ntex_io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
         assert_eq!(cqes.len(), 1);
@@ -1780,15 +1860,16 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     msghdr.msg_namelen = 32;
     msghdr.msg_controllen = 0;
 
-    let recvmsg_e = opcode::RecvMsgMulti::new(
-        Fd(server_socket.as_raw_fd()),
-        &msghdr as *const _,
-        BUF_GROUP,
-    )
-    .build()
-    .user_data(77)
-    .into();
-    unsafe { ring.submission().push(&recvmsg_e)? };
+    let recvmsg_fd = Fd(server_socket.as_raw_fd());
+    let msghdr_ptr = &msghdr as *const _;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMsgMulti::new(entry, recvmsg_fd, msghdr_ptr, BUF_GROUP).user_data(77);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     ring.submitter().submit().unwrap();
 
     let client_socket: socket2::Socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().into();
@@ -1808,11 +1889,16 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     msghdr1.msg_iovlen = 1;
 
     // Non ZeroCopy
-    let send_msg_1 = opcode::SendMsg::new(Fd(client_socket.as_raw_fd()), &msghdr1 as *const _)
-        .build()
-        .user_data(55)
-        .into();
-    unsafe { ring.submission().push(&send_msg_1)? };
+    let send_fd = Fd(client_socket.as_raw_fd());
+    let msghdr1_ptr = &msghdr1 as *const _;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::SendMsg::new(entry, send_fd, msghdr1_ptr).user_data(55);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     ring.submitter().submit().unwrap();
 
     let mut msghdr2: libc::msghdr = unsafe { mem::zeroed() };
@@ -1822,11 +1908,15 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
     msghdr2.msg_iovlen = 1;
 
     // ZeroCopy
-    let send_msg_2 = opcode::SendMsgZc::new(Fd(client_socket.as_raw_fd()), &msghdr2 as *const _)
-        .build()
-        .user_data(66)
-        .into();
-    unsafe { ring.submission().push(&send_msg_2)? };
+    let msghdr2_ptr = &msghdr2 as *const _;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::SendMsgZc::new(entry, send_fd, msghdr2_ptr).user_data(66);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     ring.submitter().submit().unwrap();
 
     // Check the completion events for the two UDP messages, plus a trailing
@@ -1909,17 +1999,24 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
     let mut buffers = [buf1.as_mut_slice(), buf2.as_mut_slice()];
 
     for (index, buf) in buffers.iter_mut().enumerate() {
-        let provide_bufs_e = opcode::ProvideBuffers::new(
-            (**buf).as_mut_ptr(),
-            buf.len() as i32,
-            1,
-            BUF_GROUP,
-            index as u16,
-        )
-        .build()
-        .user_data(11)
-        .into();
-        unsafe { ring.submission().push(&provide_bufs_e)? };
+        let buf_ptr = (**buf).as_mut_ptr();
+        let buf_len = buf.len() as i32;
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    opcode::ProvideBuffers::new(
+                        entry,
+                        buf_ptr,
+                        buf_len,
+                        1,
+                        BUF_GROUP,
+                        index as u16,
+                    )
+                    .user_data(11);
+                })
+                .ok()
+                .expect("queue is full")
+        };
         ring.submitter().submit_and_wait(1)?;
         let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
         assert_eq!(cqes.len(), 1);
@@ -1933,16 +2030,18 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
     let mut msghdr: libc::msghdr = unsafe { mem::zeroed() };
     msghdr.msg_namelen = 4;
 
-    let recvmsg_e = opcode::RecvMsgMulti::new(
-        Fd(server_socket.as_raw_fd()),
-        &msghdr as *const _,
-        BUF_GROUP,
-    )
-    .flags(libc::MSG_TRUNC as u32)
-    .build()
-    .user_data(77)
-    .into();
-    unsafe { ring.submission().push(&recvmsg_e)? };
+    let recvmsg_fd = Fd(server_socket.as_raw_fd());
+    let msghdr_ptr = &msghdr as *const _;
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMsgMulti::new(entry, recvmsg_fd, msghdr_ptr, BUF_GROUP)
+                    .flags(libc::MSG_TRUNC as u32)
+                    .user_data(77);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     ring.submitter().submit().unwrap();
 
     let client_socket: socket2::Socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().into();
@@ -1954,15 +2053,18 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
     msghdr1.msg_iov = data.as_ptr() as *const _ as *mut _;
     msghdr1.msg_iovlen = 1;
 
-    let send_msgs = (0..2)
-        .map(|_| {
-            opcode::SendMsg::new(Fd(client_socket.as_raw_fd()), &msghdr1 as *const _)
-                .build()
-                .user_data(55)
-                .into()
-        })
-        .collect::<Vec<_>>();
-    unsafe { ring.submission().push_multiple(&send_msgs)? };
+    let send_fd = Fd(client_socket.as_raw_fd());
+    let msghdr1_ptr = &msghdr1 as *const _;
+    for _ in 0..2 {
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    opcode::SendMsg::new(entry, send_fd, msghdr1_ptr).user_data(55);
+                })
+                .ok()
+                .expect("queue is full")
+        };
+    }
     ring.submitter().submit().unwrap();
 
     ring.submitter().submit_and_wait(4).unwrap();
@@ -2043,30 +2145,41 @@ pub fn test_udp_send_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // We are going to do a send below. To confirm that it works, start a
     // recv to receive the data sent by the send.
     let mut in_buf = vec![0; 1024];
-    let recv = opcode::Recv::new(fd, in_buf.as_mut_ptr(), in_buf.len() as u32)
-        .build()
-        .user_data(1)
-        .into();
+    let in_ptr = in_buf.as_mut_ptr();
+    let in_len = in_buf.len() as u32;
 
     let out_buf = b"test message";
 
-    // For the first send, we don't specify a destination address. This should
-    // result in an error.
-    let send1 = opcode::Send::new(fd, out_buf.as_ptr(), out_buf.len() as u32)
-        .build()
-        .user_data(2)
-        .into();
+    unsafe {
+        let queue = ring.submission();
+        queue
+            .push(|entry| {
+                opcode::Recv::new(entry, fd, in_ptr, in_len).user_data(1);
+            })
+            .ok()
+            .expect("queue is full");
 
-    // For the second send, we do specify the destination address, and we should
-    // receive our test message there.
-    let send2 = opcode::Send::new(fd, out_buf.as_ptr(), out_buf.len() as u32)
-        .dest_addr(addr.as_ptr())
-        .dest_addr_len(addr.len())
-        .build()
-        .user_data(3)
-        .into();
+        // For the first send, we don't specify a destination address. This should
+        // result in an error.
+        queue
+            .push(|entry| {
+                opcode::Send::new(entry, fd, out_buf.as_ptr(), out_buf.len() as u32).user_data(2);
+            })
+            .ok()
+            .expect("queue is full");
 
-    unsafe { ring.submission().push_multiple(&[recv, send1, send2])? };
+        // For the second send, we do specify the destination address, and we should
+        // receive our test message there.
+        queue
+            .push(|entry| {
+                opcode::Send::new(entry, fd, out_buf.as_ptr(), out_buf.len() as u32)
+                    .dest_addr(addr.as_ptr())
+                    .dest_addr_len(addr.len())
+                    .user_data(3);
+            })
+            .ok()
+            .expect("queue is full");
+    };
     ring.submitter().submit_and_wait(3)?;
 
     let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
@@ -2120,17 +2233,23 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
     const SIZE: usize = 512;
     let mut buffers = [[0u8; SIZE]; 2];
     for (index, buf) in buffers.iter_mut().enumerate() {
-        let provide_bufs_e = ntex_io_uring::opcode::ProvideBuffers::new(
-            buf.as_mut_ptr(),
-            SIZE as i32,
-            1,
-            BUF_GROUP,
-            index as u16,
-        )
-        .build()
-        .user_data(11)
-        .into();
-        unsafe { ring.submission().push(&provide_bufs_e)? };
+        let buf_ptr = buf.as_mut_ptr();
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::ProvideBuffers::new(
+                        entry,
+                        buf_ptr,
+                        SIZE as i32,
+                        1,
+                        BUF_GROUP,
+                        index as u16,
+                    )
+                    .user_data(11);
+                })
+                .ok()
+                .expect("queue is full")
+        };
         ring.submitter().submit_and_wait(1)?;
         let cqes: Vec<ntex_io_uring::cqueue::Entry> = ring.completion().map(Into::into).collect();
         assert_eq!(cqes.len(), 1);
@@ -2139,11 +2258,15 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
         assert_eq!(cqes[0].flags(), 0);
     }
 
-    let recvmsg_e = opcode::RecvMulti::new(Fd(server_socket.as_raw_fd()), BUF_GROUP)
-        .build()
-        .user_data(3)
-        .into();
-    unsafe { ring.submission().push(&recvmsg_e)? };
+    let recvmsg_fd = Fd(server_socket.as_raw_fd());
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::RecvMulti::new(entry, recvmsg_fd, BUF_GROUP).user_data(3);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     ring.submitter().submit()?;
 
     let client_socket: socket2::Socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().into();
@@ -2152,16 +2275,17 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
     let buf1 = b"lorep ipsum";
 
     // 2 self events + 1 recv
-    let entry1 = opcode::SendZc::new(Fd(fd), buf1.as_ptr(), buf1.len() as _)
-        .dest_addr(dest_addr.as_ptr())
-        .dest_addr_len(dest_addr.len())
-        .build()
-        .user_data(33)
-        .flags(Flags::IO_LINK)
-        .into();
-
     unsafe {
-        ring.submission().push(&entry1)?;
+        ring.submission()
+            .push(|entry| {
+                opcode::SendZc::new(entry, Fd(fd), buf1.as_ptr(), buf1.len() as _)
+                    .dest_addr(dest_addr.as_ptr())
+                    .dest_addr_len(dest_addr.len())
+                    .user_data(33)
+                    .sqe_flags(Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     // Check the completion events for the two UDP messages, plus a trailing
@@ -2387,15 +2511,16 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     let area_token = area_reg.rq_area_token;
 
     // Submit the accept op.
-    let sqe = opcode::Accept::new(
-        types::Fd(socket.as_raw_fd()),
-        ptr::null_mut(),
-        ptr::null_mut(),
-    )
-    .build()
-    .user_data(REQ_TYPE_ACCEPT)
-    .into();
-    unsafe { ring.submission().push(&sqe) }?;
+    let accept_fd = types::Fd(socket.as_raw_fd());
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Accept::new(entry, accept_fd, ptr::null_mut(), ptr::null_mut())
+                    .user_data(REQ_TYPE_ACCEPT);
+            })
+            .ok()
+            .expect("queue is full")
+    };
 
     // Spawn the send thread.
     let conn = ::std::thread::spawn(|| loop {
@@ -2427,13 +2552,18 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     {
         assert!(cqe.result() >= 0);
         let fd = cqe.result();
+        let zcrx_id = reg.zcrx_id;
         let squeue = ring.submission();
-        let sqe = opcode::RecvZc::new(types::Fd(fd), STREAM_SIZE)
-            .ifq(reg.zcrx_id)
-            .build()
-            .user_data(REQ_TYPE_RX)
-            .into();
-        unsafe { squeue.push(&sqe) }?;
+        unsafe {
+            squeue
+                .push(|entry| {
+                    opcode::RecvZc::new(entry, types::Fd(fd), STREAM_SIZE)
+                        .ifq(zcrx_id)
+                        .user_data(REQ_TYPE_RX);
+                })
+                .ok()
+                .expect("queue is full")
+        };
     }
 
     // Now process the received bytes.

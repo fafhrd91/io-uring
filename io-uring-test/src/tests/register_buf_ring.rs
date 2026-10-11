@@ -557,16 +557,16 @@ where
     S: squeue::EntryMarker,
     C: cqueue::EntryMarker,
 {
-    let write_e = opcode::Write::new(fd, text.as_ptr(), text.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let write_e = write_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&write_e).expect("queue is full");
+        let queue = ring.submission();
+        queue
+            .push(|entry: &mut S| {
+                opcode::Write::new(entry, fd, text.as_ptr(), text.len() as _)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
     }
     assert_eq!(ring.submit_and_wait(1)?, 1);
 
@@ -588,20 +588,19 @@ where
     S: squeue::EntryMarker,
     C: cqueue::EntryMarker,
 {
-    let read_e = opcode::Read::new(fd, std::ptr::null_mut(), len)
-        .offset(0)
-        .buf_group(buf_ring.rc.bgid());
+    let bgid = buf_ring.rc.bgid();
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(
-                &read_e
-                    .build()
+            .push(|entry: &mut S| {
+                opcode::Read::new(entry, fd, std::ptr::null_mut(), len)
+                    .offset(0)
+                    .buf_group(bgid)
                     .user_data(0x02)
-                    .flags(squeue::Flags::BUFFER_SELECT)
-                    .into(),
-            )
+                    .sqe_flags(squeue::Flags::BUFFER_SELECT);
+            })
+            .ok()
             .expect("queue is full");
     }
     assert_eq!(ring.submit_and_wait(1)?, 1);

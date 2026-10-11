@@ -112,16 +112,18 @@ fn _test_register_buffers<
     (0..BUFFERS).for_each(|index| {
         let buf_ptr = slices[index].as_ptr();
 
-        let write_entry = WriteFixed::new(fd, buf_ptr.cast(), BUF_SIZE as u32, index as u16)
-            .offset((index * BUF_SIZE) as u64)
-            .build()
-            .user_data(index as u64);
-
-        let mut submission_queue = ring.submission();
+        let submission_queue = ring.submission();
         // Safety: We have guaranteed that the buffers in `slices` are all valid for the entire
         // duration of this function
         unsafe {
-            submission_queue.push(&write_entry.into()).unwrap();
+            submission_queue
+                .push(|entry: &mut S| {
+                    WriteFixed::new(entry, fd, buf_ptr.cast(), BUF_SIZE as u32, index as u16)
+                        .offset((index * BUF_SIZE) as u64)
+                        .user_data(index as u64);
+                })
+                .ok()
+                .unwrap();
         }
     });
 
@@ -150,16 +152,18 @@ fn _test_register_buffers<
     (0..BUFFERS).for_each(|index| {
         let buf_ptr = slices[index].as_mut_ptr();
 
-        let read_entry = ReadFixed::new(fd, buf_ptr.cast(), BUF_SIZE as u32, index as u16)
-            .offset((index * BUF_SIZE) as u64)
-            .build()
-            .user_data(index as u64);
-
-        let mut submission_queue = ring.submission();
+        let submission_queue = ring.submission();
         // Safety: We have guaranteed that the buffers in `slices` are all valid for the entire
         // duration of this function
         unsafe {
-            submission_queue.push(&read_entry.into()).unwrap();
+            submission_queue
+                .push(|entry: &mut S| {
+                    ReadFixed::new(entry, fd, buf_ptr.cast(), BUF_SIZE as u32, index as u16)
+                        .offset((index * BUF_SIZE) as u64)
+                        .user_data(index as u64);
+                })
+                .ok()
+                .unwrap();
         }
     });
 
@@ -211,26 +215,29 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
         iov_base: buf.as_mut_ptr() as _,
     }];
     let timeout = types::Timespec::new().nsec(50 * 1_000_000);
-    let timeout = opcode::Timeout::new(&timeout as _)
-        .build()
-        .user_data(TIMEOUT_TAG)
-        .into();
-    let read_sqe = opcode::ReadFixed::new(
+    let mut timeout_sqe = squeue::Entry::default();
+    opcode::Timeout::new(&mut timeout_sqe, &timeout as _).user_data(TIMEOUT_TAG);
+    let mut read_sqe = squeue::Entry::default();
+    opcode::ReadFixed::new(
+        &mut read_sqe,
         types::Fd(read.as_raw_fd()),
         buf.as_mut_ptr(),
         buf.len() as _,
         5,
     )
-    .build()
-    .user_data(42)
-    .into();
+    .user_data(42);
 
     // Register a buffer table and then immediately unregister it
     ring.submitter().register_buffers_sparse(1)?;
     ring.submitter().unregister_buffers()?;
 
     // Push a timeout of 50ms
-    unsafe { ring.submission().push(&timeout).unwrap() };
+    unsafe {
+        ring.submission()
+            .push(|e: &mut S| *e = S::from(timeout_sqe.clone()))
+            .ok()
+            .unwrap()
+    };
 
     // We should not receive any other entries than the timeout
     check_only_timeout(ring)?;
@@ -242,7 +249,12 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
     let cqe = {
         write.write("yo".as_bytes())?;
 
-        unsafe { ring.submission().push(&read_sqe).unwrap() };
+        unsafe {
+            ring.submission()
+                .push(|e: &mut S| *e = S::from(read_sqe.clone()))
+                .ok()
+                .unwrap()
+        };
 
         ring.submit_and_wait(1)?;
 
@@ -265,7 +277,10 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
             .register_buffers_update(5, &iovecs, Some(&tags))?;
 
         // Push a timeout of 50ms
-        ring.submission().push(&timeout).unwrap();
+        ring.submission()
+            .push(|e: &mut S| *e = S::from(timeout_sqe.clone()))
+            .ok()
+            .unwrap();
     }
 
     // We should not receive any other entries than the timeout
@@ -295,7 +310,10 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
     // Try reading now that the buffer is registered at index 5
     let cqe = {
         unsafe {
-            ring.submission().push(&read_sqe).unwrap();
+            ring.submission()
+                .push(|e: &mut S| *e = S::from(read_sqe.clone()))
+                .ok()
+                .unwrap();
         }
 
         ring.submit_and_wait(1)?;
@@ -395,11 +413,17 @@ pub fn test_register_buffers_clone(test: &Test) -> anyhow::Result<()> {
     let file = tempfile::tempfile()?;
     let fd = Fd(file.as_raw_fd());
 
-    let write = WriteFixed::new(fd, buf.as_ptr(), BUF_SIZE as u32, 0)
-        .build()
-        .user_data(1);
+    let buf_ptr = buf.as_ptr();
     // Safety: buffer index 0 is registered (cloned) and `buf` is valid here.
-    unsafe { dst_ring.submission().push(&write)? };
+    unsafe {
+        dst_ring
+            .submission()
+            .push(|entry| {
+                WriteFixed::new(entry, fd, buf_ptr, BUF_SIZE as u32, 0).user_data(1);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     assert_eq!(dst_ring.submit_and_wait(1)?, 1);
     let cqe = dst_ring.completion().next().unwrap();
     assert_eq!(
@@ -409,11 +433,17 @@ pub fn test_register_buffers_clone(test: &Test) -> anyhow::Result<()> {
     );
 
     buf.fill(0);
-    let read = ReadFixed::new(fd, buf.as_mut_ptr(), BUF_SIZE as u32, 0)
-        .build()
-        .user_data(2);
+    let buf_ptr = buf.as_mut_ptr();
     // Safety: buffer index 0 is registered (cloned) and `buf` is valid here.
-    unsafe { dst_ring.submission().push(&read)? };
+    unsafe {
+        dst_ring
+            .submission()
+            .push(|entry| {
+                ReadFixed::new(entry, fd, buf_ptr, BUF_SIZE as u32, 0).user_data(2);
+            })
+            .ok()
+            .expect("queue is full")
+    };
     assert_eq!(dst_ring.submit_and_wait(1)?, 1);
     let cqe = dst_ring.completion().next().unwrap();
     assert_eq!(

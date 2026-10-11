@@ -3,11 +3,11 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic;
 use std::{io, mem, ptr};
 
-use crate::register::{execute, Probe, RegisterRing};
+use crate::Parameters;
+use crate::register::{Probe, RegisterRing, execute};
 use crate::sys;
 use crate::types::{CancelBuilder, CloneBuffersFlags, Napi, Timespec};
-use crate::util::{cast_ptr, OwnedFd};
-use crate::Parameters;
+use crate::util::{OwnedFd, cast_ptr};
 use bitflags::bitflags;
 
 use crate::register::Restriction;

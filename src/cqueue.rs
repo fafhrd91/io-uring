@@ -6,7 +6,7 @@ use std::mem::MaybeUninit;
 use std::sync::atomic;
 
 use crate::sys;
-use crate::util::{private, unsync_load, Mmap};
+use crate::util::{Mmap, private, unsync_load};
 
 pub(crate) struct Inner<E: EntryMarker> {
     head: *const atomic::AtomicU32,
@@ -383,20 +383,20 @@ impl Entry32 {
     /// operation this is equivalent to the return value of the `read(2)` system call.
     #[inline]
     pub fn result(&self) -> i32 {
-        self.0 .0.res
+        self.0.0.res
     }
 
     /// The user data of the request, as set by
     /// [`Entry::user_data`](crate::squeue::Entry::user_data) on the submission queue event.
     #[inline]
     pub fn user_data(&self) -> u64 {
-        self.0 .0.user_data
+        self.0.0.user_data
     }
 
     /// Replace the application-supplied user data.
     #[inline]
     pub fn set_user_data(&mut self, user_data: u64) {
-        self.0 .0.user_data = user_data;
+        self.0.0.user_data = user_data;
     }
 
     /// Metadata related to the operation.
@@ -406,7 +406,7 @@ impl Entry32 {
     ///   [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT) for more info.
     #[inline]
     pub fn flags(&self) -> u32 {
-        self.0 .0.flags
+        self.0.0.flags
     }
 
     /// Additional data available in 32-byte completion queue entries (CQEs).

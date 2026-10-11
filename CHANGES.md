@@ -1,5 +1,22 @@
 # Changes
 
+## [1.0.0] - 2026-10-11
+
+* opcodes initialize the submission entry in place. `X::new(&mut entry, ..)`
+  writes required fields into a zeroed entry, setters update it directly, `build()`
+  is removed
+
+* `SubmissionQueue::push()` takes a closure that initializes the zeroed
+  queue slot in place. `push_multiple()`, `push_unchecked()`, `try_push_inline()`
+  and `PushError` are removed, `has_space()` takes no arguments
+
+* `EntryMarker` requires `AsMut<Entry>`
+
+* Add `opcode::Recv::buffer_select()`, selects the receive buffer from a
+  provided buffer group
+
+* Fix `opcode::ReadMulti` clearing `FIXED_FILE` for fixed file descriptors
+
 ## [0.7.150] - Unreleased
 
 * Add `IoUring::submission_unsynced()`, returns the submission queue without

@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::{io, ptr};
 
-use ntex_io_uring::{opcode, squeue, types, IoUring, SubmissionQueue};
+use ntex_io_uring::{IoUring, SubmissionQueue, opcode, squeue, types};
 use slab::Slab;
 
 #[derive(Clone, Debug)]
@@ -31,18 +31,17 @@ pub struct AcceptCount {
 
 impl AcceptCount {
     fn new(fd: RawFd, token: usize, count: usize) -> AcceptCount {
-        AcceptCount {
-            entry: opcode::Accept::new(types::Fd(fd), ptr::null_mut(), ptr::null_mut())
-                .build()
-                .user_data(token as _),
-            count,
-        }
+        let mut entry = squeue::Entry::default();
+        opcode::Accept::new(&mut entry, types::Fd(fd), ptr::null_mut(), ptr::null_mut())
+            .user_data(token as _);
+
+        AcceptCount { entry, count }
     }
 
     pub fn push_to(&mut self, sq: &mut SubmissionQueue<'_>) {
         while self.count > 0 {
             unsafe {
-                match sq.push(&self.entry) {
+                match sq.push(|entry| *entry = self.entry.clone()) {
                     Ok(_) => self.count -= 1,
                     Err(_) => break,
                 }
@@ -91,7 +90,7 @@ fn main() -> anyhow::Result<()> {
 
             match backlog.pop_front() {
                 Some(sqe) => unsafe {
-                    let _ = sq.push(&sqe);
+                    let _ = sq.push(|entry| *entry = sqe);
                 },
                 None => break,
             }
@@ -122,12 +121,12 @@ fn main() -> anyhow::Result<()> {
                     let fd = ret;
                     let poll_token = token_alloc.insert(Token::Poll { fd });
 
-                    let poll_e = opcode::PollAdd::new(types::Fd(fd), libc::POLLIN as _)
-                        .build()
+                    let mut poll_e = squeue::Entry::default();
+                    opcode::PollAdd::new(&mut poll_e, types::Fd(fd), libc::POLLIN as _)
                         .user_data(poll_token as _);
 
                     unsafe {
-                        if sq.push(&poll_e).is_err() {
+                        if sq.push(|entry| *entry = poll_e.clone()).is_err() {
                             backlog.push_back(poll_e);
                         }
                     }
@@ -145,12 +144,12 @@ fn main() -> anyhow::Result<()> {
 
                     *token = Token::Read { fd, buf_index };
 
-                    let read_e = opcode::Recv::new(types::Fd(fd), buf.as_mut_ptr(), buf.len() as _)
-                        .build()
+                    let mut read_e = squeue::Entry::default();
+                    opcode::Recv::new(&mut read_e, types::Fd(fd), buf.as_mut_ptr(), buf.len() as _)
                         .user_data(token_index as _);
 
                     unsafe {
-                        if sq.push(&read_e).is_err() {
+                        if sq.push(|entry| *entry = read_e.clone()).is_err() {
                             backlog.push_back(read_e);
                         }
                     }
@@ -176,12 +175,12 @@ fn main() -> anyhow::Result<()> {
                             offset: 0,
                         };
 
-                        let write_e = opcode::Send::new(types::Fd(fd), buf.as_ptr(), len as _)
-                            .build()
+                        let mut write_e = squeue::Entry::default();
+                        opcode::Send::new(&mut write_e, types::Fd(fd), buf.as_ptr(), len as _)
                             .user_data(token_index as _);
 
                         unsafe {
-                            if sq.push(&write_e).is_err() {
+                            if sq.push(|entry| *entry = write_e.clone()).is_err() {
                                 backlog.push_back(write_e);
                             }
                         }
@@ -195,14 +194,14 @@ fn main() -> anyhow::Result<()> {
                 } => {
                     let write_len = ret as usize;
 
-                    let entry = if offset + write_len >= len {
+                    let mut entry = squeue::Entry::default();
+                    if offset + write_len >= len {
                         bufpool.push(buf_index);
 
                         *token = Token::Poll { fd };
 
-                        opcode::PollAdd::new(types::Fd(fd), libc::POLLIN as _)
-                            .build()
-                            .user_data(token_index as _)
+                        opcode::PollAdd::new(&mut entry, types::Fd(fd), libc::POLLIN as _)
+                            .user_data(token_index as _);
                     } else {
                         let offset = offset + write_len;
                         let len = len - offset;
@@ -216,13 +215,12 @@ fn main() -> anyhow::Result<()> {
                             len,
                         };
 
-                        opcode::Write::new(types::Fd(fd), buf.as_ptr(), len as _)
-                            .build()
-                            .user_data(token_index as _)
+                        opcode::Write::new(&mut entry, types::Fd(fd), buf.as_ptr(), len as _)
+                            .user_data(token_index as _);
                     };
 
                     unsafe {
-                        if sq.push(&entry).is_err() {
+                        if sq.push(|e| *e = entry.clone()).is_err() {
                             backlog.push_back(entry);
                         }
                     }

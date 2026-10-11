@@ -19,19 +19,21 @@ pub fn test_async_cancel_user_data<S: squeue::EntryMarker, C: cqueue::EntryMarke
     println!("test async_cancel_user_data");
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts).build();
+    let mut timeout_e = squeue::Entry::default();
+    opcode::Timeout::new(&mut timeout_e, &ts);
 
     // Cancel the timeout matching user data
     let builder = CancelBuilder::user_data(2003);
-    let cancel_e = opcode::AsyncCancel2::new(builder).build();
+    let mut cancel_e = squeue::Entry::default();
+    opcode::AsyncCancel2::new(&mut cancel_e, builder);
 
-    let entries = [
-        timeout_e.user_data(2003).into(),
-        cancel_e.user_data(2004).into(),
-    ];
+    let entries = [timeout_e.user_data(2003), cancel_e.user_data(2004)];
     for sqe in &entries {
         unsafe {
-            ring.submission().push(sqe).expect("queue is full");
+            ring.submission()
+                .push(|e| *e = S::from(sqe.clone()))
+                .ok()
+                .expect("queue is full");
         }
     }
 
@@ -67,20 +69,25 @@ pub fn test_async_cancel_user_data_all<S: squeue::EntryMarker, C: cqueue::EntryM
     println!("test async_cancel_user_data_all");
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts).build();
+    let mut timeout_e = squeue::Entry::default();
+    opcode::Timeout::new(&mut timeout_e, &ts);
 
     // Cancel all timeouts matching user data
     let builder = CancelBuilder::user_data(2003).all();
-    let cancel_e = opcode::AsyncCancel2::new(builder).build();
+    let mut cancel_e = squeue::Entry::default();
+    opcode::AsyncCancel2::new(&mut cancel_e, builder);
 
     let entries = [
-        timeout_e.clone().user_data(2003).into(),
-        timeout_e.user_data(2003).into(),
-        cancel_e.user_data(2004).into(),
+        timeout_e.clone().user_data(2003),
+        timeout_e.user_data(2003),
+        cancel_e.user_data(2004),
     ];
     for sqe in &entries {
         unsafe {
-            ring.submission().push(sqe).expect("queue is full");
+            ring.submission()
+                .push(|e| *e = S::from(sqe.clone()))
+                .ok()
+                .expect("queue is full");
         }
     }
 
@@ -118,20 +125,25 @@ pub fn test_async_cancel_any<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     println!("test async_cancel_any");
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts).build();
+    let mut timeout_e = squeue::Entry::default();
+    opcode::Timeout::new(&mut timeout_e, &ts);
 
     // Cancel any pending requests
     let builder = CancelBuilder::any();
-    let cancel_e = opcode::AsyncCancel2::new(builder).build();
+    let mut cancel_e = squeue::Entry::default();
+    opcode::AsyncCancel2::new(&mut cancel_e, builder);
 
     let entries = [
-        timeout_e.clone().user_data(2003).into(),
-        timeout_e.user_data(2004).into(),
-        cancel_e.user_data(2005).into(),
+        timeout_e.clone().user_data(2003),
+        timeout_e.user_data(2004),
+        cancel_e.user_data(2005),
     ];
     for sqe in &entries {
         unsafe {
-            ring.submission().push(sqe).expect("queue is full");
+            ring.submission()
+                .push(|e| *e = S::from(sqe.clone()))
+                .ok()
+                .expect("queue is full");
         }
     }
 
@@ -169,19 +181,21 @@ pub fn test_async_cancel_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let _fd = create_dummy_fd()?;
     let fd = types::Fd(_fd.as_raw_fd());
-    let poll_e = opcode::PollAdd::new(fd, libc::POLLIN as _).build();
+    let mut poll_e = squeue::Entry::default();
+    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _);
 
     // Cancel one poll request matching FD
     let builder = CancelBuilder::fd(fd);
-    let cancel_e = opcode::AsyncCancel2::new(builder).build();
+    let mut cancel_e = squeue::Entry::default();
+    opcode::AsyncCancel2::new(&mut cancel_e, builder);
 
-    let entries = [
-        poll_e.user_data(2003).into(),
-        cancel_e.user_data(2004).into(),
-    ];
+    let entries = [poll_e.user_data(2003), cancel_e.user_data(2004)];
     for sqe in &entries {
         unsafe {
-            ring.submission().push(sqe).expect("queue is full");
+            ring.submission()
+                .push(|e| *e = S::from(sqe.clone()))
+                .ok()
+                .expect("queue is full");
         }
     }
 
@@ -218,20 +232,25 @@ pub fn test_async_cancel_fd_all<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let _fd = create_dummy_fd()?;
     let fd = types::Fd(_fd.as_raw_fd());
-    let poll_e = opcode::PollAdd::new(fd, libc::POLLIN as _).build();
+    let mut poll_e = squeue::Entry::default();
+    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _);
 
     // Cancel all requests matching FD
     let builder = CancelBuilder::fd(fd).all();
-    let cancel_e = opcode::AsyncCancel2::new(builder).build();
+    let mut cancel_e = squeue::Entry::default();
+    opcode::AsyncCancel2::new(&mut cancel_e, builder);
 
     let entries = [
-        poll_e.clone().user_data(2003).into(),
-        poll_e.user_data(2004).into(),
-        cancel_e.user_data(2005).into(),
+        poll_e.clone().user_data(2003),
+        poll_e.user_data(2004),
+        cancel_e.user_data(2005),
     ];
     for sqe in &entries {
         unsafe {
-            ring.submission().push(sqe).expect("queue is full");
+            ring.submission()
+                .push(|e| *e = S::from(sqe.clone()))
+                .ok()
+                .expect("queue is full");
         }
     }
 

@@ -1,265 +1,194 @@
-//! Operation codes that can be used to construct [`squeue::Entry`](crate::squeue::Entry)s.
+//! Operation codes that initialize [`squeue::Entry`](crate::squeue::Entry)s in place.
+//!
+//! Each operation is constructed with `new`, which takes the entry to initialize along with
+//! the operation's required arguments. Optional parameters are written by the setters.
+//!
+//! The entry must be zeroed before `new` is called, entries provided by
+//! [`SubmissionQueue::push`](crate::SubmissionQueue::push) and [`Entry::default`] are.
+//!
+//! ```
+//! use ntex_io_uring::{opcode, squeue::Entry, types};
+//! use std::ffi::CString;
+//!
+//! let path = CString::new("/etc/passwd").unwrap();
+//!
+//! let mut entry = Entry::default();
+//! opcode::OpenAt::new(&mut entry, types::Fd(libc::AT_FDCWD), path.as_ptr())
+//!     .flags(libc::O_RDONLY)
+//!     .user_data(0x42);
+//! ```
 
-#![allow(clippy::new_without_default)]
+#![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
 
-use std::convert::TryInto;
-use std::mem;
 use std::os::unix::io::RawFd;
+use std::{convert::TryInto, mem};
 
-use crate::squeue::Entry;
-use crate::squeue::Entry128;
+use crate::squeue::{Entry, Entry128, Flags};
 use crate::sys;
 use crate::types::{self, sealed};
 
 macro_rules! assign_fd {
-    ( $sqe:ident . fd = $opfd:expr ) => {
-        match $opfd {
+    ( $sqe:ident, $fd:expr ) => {
+        match sealed::UseFixed::into($fd) {
             sealed::Target::Fd(fd) => $sqe.fd = fd,
             sealed::Target::Fixed(idx) => {
                 $sqe.fd = idx as _;
-                $sqe.flags |= crate::squeue::Flags::FIXED_FILE.bits();
+                $sqe.flags |= Flags::FIXED_FILE.bits();
             }
+        }
+    };
+}
+
+macro_rules! opcode_common {
+    () => {
+        /// Set the user data. This is an application-supplied value that will be passed
+        /// straight through into the [completion queue entry](crate::cqueue::Entry::user_data).
+        #[inline]
+        pub fn user_data(self, user_data: u64) -> Self {
+            self.sqe.user_data = user_data;
+            self
+        }
+
+        /// Set the submission event's [flags](Flags), they are ORed with already set flags.
+        #[inline]
+        pub fn sqe_flags(self, flags: Flags) -> Self {
+            self.sqe.flags |= flags.bits();
+            self
+        }
+
+        /// Set the personality of this event. You can obtain a personality using
+        /// [`Submitter::register_personality`](crate::Submitter::register_personality).
+        #[inline]
+        pub fn personality(self, personality: u16) -> Self {
+            self.sqe.personality = personality;
+            self
         }
     };
 }
 
 macro_rules! opcode {
-    (@type impl sealed::UseFixed ) => {
-        sealed::Target
-    };
-    (@type impl sealed::UseFd ) => {
-        RawFd
-    };
-    (@type $name:ty ) => {
-        $name
-    };
     (
         $( #[$outer:meta] )*
-        pub struct $name:ident {
-            $( #[$new_meta:meta] )*
+        pub struct $name:ident = $code:expr;
 
-            $( $field:ident : { $( $tnt:tt )+ } ),*
+        $( #[$new_meta:meta] )*
+        fn new($sqe:ident $(, $arg:ident : $aty:ty )* $(,)?) $new_body:block
 
-            $(,)?
-
-            ;;
-
-            $(
-                $( #[$opt_meta:meta] )*
-                $opt_field:ident : $opt_tname:ty = $default:expr
-            ),*
-
-            $(,)?
-        }
-
-        pub const CODE = $opcode:expr;
-
-        $( #[$build_meta:meta] )*
-        pub fn build($self:ident) -> $entry:ty $build_block:block
+        $(
+            $( #[$set_meta:meta] )*
+            fn $setter:ident($s:ident $(, $sarg:ident : $saty:ty )* $(,)?) $set_body:block
+        )*
     ) => {
         $( #[$outer] )*
-        pub struct $name {
-            $( $field : opcode!(@type $( $tnt )*), )*
-            $( $opt_field : $opt_tname, )*
+        pub struct $name<'a> {
+            sqe: &'a mut sys::io_uring_sqe,
         }
 
-        impl $name {
-            $( #[$new_meta] )*
-            #[inline]
-            pub fn new($( $field : $( $tnt )* ),*) -> Self {
-                $name {
-                    $( $field: $field.into(), )*
-                    $( $opt_field: $default, )*
-                }
-            }
-
+        impl<'a> $name<'a> {
             /// The opcode of the operation. This can be passed to
             /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
             /// supported with the current kernel.
-            pub const CODE: u8 = $opcode as _;
+            pub const CODE: u8 = $code as _;
+
+            $( #[$new_meta] )*
+            #[inline]
+            pub fn new(entry: &'a mut impl AsMut<Entry> $(, $arg: $aty )*) -> Self {
+                let $sqe = &mut entry.as_mut().0;
+                $sqe.opcode = Self::CODE;
+                $new_body
+                Self { sqe: $sqe }
+            }
 
             $(
-                $( #[$opt_meta] )*
+                $( #[$set_meta] )*
                 #[inline]
-                pub const fn $opt_field(mut self, $opt_field: $opt_tname) -> Self {
-                    self.$opt_field = $opt_field;
+                pub fn $setter(self $(, $sarg: $saty )*) -> Self {
+                    {
+                        let $s = &mut *self.sqe;
+                        $set_body
+                    }
                     self
                 }
             )*
 
-            $( #[$build_meta] )*
-            #[inline]
-            pub fn build($self) -> $entry $build_block
+            opcode_common!();
         }
     };
-    (
-        $( #[$outer:meta] )*
-        pub struct $name:ident {
-            $( #[$new_meta:meta] )*
-
-            $( $field:ident : { $( $tnt:tt )+ } ),*
-
-            $(,)?
-
-            ;;
-
-            $(
-                $( #[$opt_meta:meta] )*
-                $opt_field:ident : $opt_tname:ty = $default:expr
-            ),*
-
-            $(,)?
-        }
-
-        pub const CODE = $opcode:expr;
-
-        $( #[$build_meta:meta] )*
-        pub fn build($self:ident) -> $entry:ty $build_block:block
-
-        pub fn build_into($self2:ident, $sqe:ident: $sqeTy:ty) $build_block2:block
-    ) => {
-        $( #[$outer] )*
-        pub struct $name {
-            $( $field : opcode!(@type $( $tnt )*), )*
-            $( $opt_field : $opt_tname, )*
-        }
-
-        impl $name {
-            $( #[$new_meta] )*
-            #[inline]
-            pub fn new($( $field : $( $tnt )* ),*) -> Self {
-                $name {
-                    $( $field: $field.into(), )*
-                    $( $opt_field: $default, )*
-                }
-            }
-
-            /// The opcode of the operation. This can be passed to
-            /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
-            /// supported with the current kernel.
-            pub const CODE: u8 = $opcode as _;
-
-            $(
-                $( #[$opt_meta] )*
-                #[inline]
-                pub const fn $opt_field(mut self, $opt_field: $opt_tname) -> Self {
-                    self.$opt_field = $opt_field;
-                    self
-                }
-            )*
-
-            $( #[$build_meta] )*
-            #[inline]
-            pub fn build($self) -> $entry $build_block
-
-            #[inline]
-            pub fn build_into($self2, $sqe: $sqeTy) $build_block2
-        }
-    }
-}
-
-/// inline zeroed to improve codegen
-#[inline(always)]
-fn sqe_zeroed() -> sys::io_uring_sqe {
-    unsafe { mem::zeroed() }
 }
 
 opcode! {
     /// Do not perform any I/O.
     ///
     /// This is useful for testing the performance of the io_uring implementation itself.
-    #[derive(Debug)]
-    pub struct Nop { ;; }
+    pub struct Nop = sys::IORING_OP_NOP;
 
-    pub const CODE = sys::IORING_OP_NOP;
-
-    pub fn build(self) -> Entry {
-        let Nop {} = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe) {
         sqe.fd = -1;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Vectored read, equivalent to `preadv2(2)`.
-    #[derive(Debug)]
-    pub struct Readv {
-        fd: { impl sealed::UseFixed },
-        iovec: { *const libc::iovec },
-        len: { u32 },
-        ;;
-        ioprio: u16 = 0,
-        offset: u64 = 0,
-        /// specified for read operations, contains a bitwise OR of per-I/O flags,
-        /// as described in the `preadv2(2)` man page.
-        rw_flags: i32 = 0,
-        buf_group: u16 = 0
-    }
+    pub struct Readv = sys::IORING_OP_READV;
 
-    pub const CODE = sys::IORING_OP_READV;
-
-    pub fn build(self) -> Entry {
-        let Readv {
-            fd,
-            iovec, len, offset,
-            ioprio, rw_flags,
-            buf_group
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, iovec: *const libc::iovec, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = iovec as _;
         sqe.len = len;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// specified for read operations, contains a bitwise OR of per-I/O flags,
+    /// as described in the `preadv2(2)` man page.
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    fn buf_group(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Vectored write, equivalent to `pwritev2(2)`.
-    #[derive(Debug)]
-    pub struct Writev {
-        fd: { impl sealed::UseFixed },
-        iovec: { *const libc::iovec },
-        len: { u32 },
-        ;;
-        ioprio: u16 = 0,
-        offset: u64 = 0,
-        /// specified for write operations, contains a bitwise OR of per-I/O flags,
-        /// as described in the `preadv2(2)` man page.
-        rw_flags: i32 = 0,
-        /// Write stream id (Linux 6.16+); `0` means no stream.
-        /// Older kernels ignore this field.
-        write_stream: u8 = 0
-    }
+    pub struct Writev = sys::IORING_OP_WRITEV;
 
-    pub const CODE = sys::IORING_OP_WRITEV;
-
-    pub fn build(self) -> Entry {
-        let Writev {
-            fd,
-            iovec, len, offset,
-            ioprio, rw_flags,
-            write_stream
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, iovec: *const libc::iovec, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = iovec as _;
         sqe.len = len;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// File offset to write at, defaults to `0`.
+    ///
+    /// Use `u64::MAX` to write at the current file position.
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// specified for write operations, contains a bitwise OR of per-I/O flags,
+    /// as described in the `preadv2(2)` man page.
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    /// Write stream id (Linux 6.16+); `0` means no stream.
+    /// Older kernels ignore this field.
+    fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
-        Entry(sqe)
     }
 }
 
@@ -278,39 +207,29 @@ opcode! {
     /// the fsync. To enforce ordering one may utilize linked SQEs, `IOSQE_IO_DRAIN` or wait for the
     /// arrival of CQEs of requests which have to be ordered before a given request before
     /// submitting its SQE.
-    #[derive(Debug)]
-    pub struct Fsync {
-        fd: { impl sealed::UseFixed },
-        ;;
-        /// Offset within the file to start the sync range. Together with [`len`](Self::len), this
-        /// selects a byte range; when both are zero (the default), the entire file is synced.
-        offset: u64 = 0,
-        /// Length of the range to sync, in bytes. When zero (the default) with
-        /// [`offset`](Self::offset) also zero, the entire file is synced.
-        len: u32 = 0,
-        /// The `flags` bit mask may contain either 0, for a normal file integrity sync,
-        /// or [types::FsyncFlags::DATASYNC] to provide data sync only semantics.
-        /// See the descriptions of `O_SYNC` and `O_DSYNC` in the `open(2)` manual page for more information.
-        flags: types::FsyncFlags = types::FsyncFlags::empty()
+    pub struct Fsync = sys::IORING_OP_FSYNC;
+
+    fn new(sqe, fd: impl sealed::UseFixed) {
+        assign_fd!(sqe, fd);
     }
 
-    pub const CODE = sys::IORING_OP_FSYNC;
-
-    pub fn build(self) -> Entry {
-        let Fsync {
-            fd,
-            offset,
-            len,
-            flags,
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len;
+    /// Offset within the file to start the sync range. Together with [`len`](Self::len), this
+    /// selects a byte range; when both are zero (the default), the entire file is synced.
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// Length of the range to sync, in bytes. When zero (the default) with
+    /// [`offset`](Self::offset) also zero, the entire file is synced.
+    fn len(sqe, len: u32) {
+        sqe.len = len;
+    }
+
+    /// The `flags` bit mask may contain either 0, for a normal file integrity sync,
+    /// or [types::FsyncFlags::DATASYNC] to provide data sync only semantics.
+    /// See the descriptions of `O_SYNC` and `O_DSYNC` in the `open(2)` manual page for more information.
+    fn flags(sqe, flags: types::FsyncFlags) {
         sqe.__bindgen_anon_3.fsync_flags = flags.bits();
-        Entry(sqe)
     }
 }
 
@@ -319,41 +238,29 @@ opcode! {
     /// [`Submitter::register_buffers`](crate::Submitter::register_buffers).
     ///
     /// The return values match those documented in the `preadv2(2)` man pages.
-    #[derive(Debug)]
-    pub struct ReadFixed {
-        fd: { impl sealed::UseFixed },
-        buf: { *mut u8 },
-        len: { u32 },
-        buf_index: { u16 },
-        ;;
-        ioprio: u16 = 0,
-        /// The offset of the file to read from.
-        offset: u64 = 0,
-        /// Specified for read operations, contains a bitwise OR of per-I/O flags, as described in
-        /// the `preadv2(2)` man page.
-        rw_flags: i32 = 0
-    }
+    pub struct ReadFixed = sys::IORING_OP_READ_FIXED;
 
-    pub const CODE = sys::IORING_OP_READ_FIXED;
-
-    pub fn build(self) -> Entry {
-        let ReadFixed {
-            fd,
-            buf, len, offset,
-            buf_index,
-            ioprio, rw_flags
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *mut u8, len: u32, buf_index: u16) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
-        sqe.__bindgen_anon_1.off = offset;
-        sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
         sqe.__bindgen_anon_4.buf_index = buf_index;
-        Entry(sqe)
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// The offset of the file to read from.
+    fn offset(sqe, offset: u64) {
+        sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// Specified for read operations, contains a bitwise OR of per-I/O flags, as described in
+    /// the `preadv2(2)` man page.
+    fn rw_flags(sqe, rw_flags: i32) {
+        sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
 }
 
@@ -362,46 +269,35 @@ opcode! {
     /// [`Submitter::register_buffers`](crate::Submitter::register_buffers).
     ///
     /// The return values match those documented in the `pwritev2(2)` man pages.
-    #[derive(Debug)]
-    pub struct WriteFixed {
-        fd: { impl sealed::UseFixed },
-        buf: { *const u8 },
-        len: { u32 },
-        buf_index: { u16 },
-        ;;
-        ioprio: u16 = 0,
-        /// The offset of the file to write to.
-        offset: u64 = 0,
-        /// Specified for write operations, contains a bitwise OR of per-I/O flags, as described in
-        /// the `pwritev2(2)` man page.
-        rw_flags: i32 = 0,
-        /// Write stream id (Linux 6.16+); `0` means no stream.
-        /// Older kernels ignore this field.
-        write_stream: u8 = 0
-    }
+    pub struct WriteFixed = sys::IORING_OP_WRITE_FIXED;
 
-    pub const CODE = sys::IORING_OP_WRITE_FIXED;
-
-    pub fn build(self) -> Entry {
-        let WriteFixed {
-            fd,
-            buf, len, offset,
-            buf_index,
-            ioprio, rw_flags,
-            write_stream
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *const u8, len: u32, buf_index: u16) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
-        sqe.__bindgen_anon_1.off = offset;
-        sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
-        sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
         sqe.__bindgen_anon_4.buf_index = buf_index;
-        Entry(sqe)
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    /// The offset of the file to write to.
+    fn offset(sqe, offset: u64) {
+        sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// Specified for write operations, contains a bitwise OR of per-I/O flags, as described in
+    /// the `pwritev2(2)` man page.
+    fn rw_flags(sqe, rw_flags: i32) {
+        sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    /// Write stream id (Linux 6.16+); `0` means no stream.
+    /// Older kernels ignore this field.
+    fn write_stream(sqe, write_stream: u8) {
+        sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
     }
 }
 
@@ -417,40 +313,26 @@ opcode! {
     /// on completion if the application should expect further CQE entries from the original
     /// request. If this flag isn't set on completion, then the poll request has been terminated
     /// and no further events will be generated. This mode is available since 5.13.
-    #[derive(Debug)]
-    pub struct PollAdd {
-        /// The bits that may be set in `flags` are defined in `<poll.h>`,
-        /// and documented in `poll(2)`.
-        fd: { impl sealed::UseFixed },
-        flags: { u32 },
-        ;;
-        multi: bool = false
+    pub struct PollAdd = sys::IORING_OP_POLL_ADD;
+
+    /// The bits that may be set in `flags` are defined in `<poll.h>`,
+    /// and documented in `poll(2)`.
+    fn new(sqe, fd: impl sealed::UseFixed, flags: u32) {
+        assign_fd!(sqe, fd);
+
+        #[cfg(target_endian = "little")]
+        {
+            sqe.__bindgen_anon_3.poll32_events = flags;
+        }
+
+        #[cfg(target_endian = "big")]
+        {
+            sqe.__bindgen_anon_3.poll32_events = (flags << 16) | (flags >> 16);
+        }
     }
 
-    pub const CODE = sys::IORING_OP_POLL_ADD;
-
-    pub fn build(self) -> Entry {
-        let PollAdd { fd, flags, multi } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        if multi {
-            sqe.len = sys::IORING_POLL_ADD_MULTI;
-        }
-
-        #[cfg(target_endian = "little")] {
-            sqe.__bindgen_anon_3.poll32_events = flags;
-        }
-
-        #[cfg(target_endian = "big")] {
-            let x = flags << 16;
-            let y = flags >> 16;
-            let flags = x | y;
-            sqe.__bindgen_anon_3.poll32_events = flags;
-        }
-
-        Entry(sqe)
+    fn multi(sqe, multi: bool) {
+        sqe.len = if multi { sys::IORING_POLL_ADD_MULTI } else { 0 };
     }
 }
 
@@ -459,84 +341,55 @@ opcode! {
     ///
     /// If found, the `result` method of the `cqueue::Entry` will return 0.
     /// If not found, `result` will return `-libc::ENOENT`.
-    #[derive(Debug)]
-    pub struct PollRemove {
-        user_data: { u64 }
-        ;;
-    }
+    pub struct PollRemove = sys::IORING_OP_POLL_REMOVE;
 
-    pub const CODE = sys::IORING_OP_POLL_REMOVE;
-
-    pub fn build(self) -> Entry {
-        let PollRemove { user_data } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, user_data: u64) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = user_data;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Sync a file segment with disk, equivalent to `sync_file_range(2)`.
-    #[derive(Debug)]
-    pub struct SyncFileRange {
-        fd: { impl sealed::UseFixed },
-        len: { u32 },
-        ;;
-        /// the offset method holds the offset in bytes
-        offset: u64 = 0,
-        /// the flags method holds the flags for the command
-        flags: u32 = 0
+    pub struct SyncFileRange = sys::IORING_OP_SYNC_FILE_RANGE;
+
+    fn new(sqe, fd: impl sealed::UseFixed, len: u32) {
+        assign_fd!(sqe, fd);
+        sqe.len = len;
     }
 
-    pub const CODE = sys::IORING_OP_SYNC_FILE_RANGE;
-
-    pub fn build(self) -> Entry {
-        let SyncFileRange {
-            fd,
-            len, offset,
-            flags
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len;
+    /// the offset method holds the offset in bytes
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// the flags method holds the flags for the command
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.sync_range_flags = flags;
-        Entry(sqe)
     }
 }
 
 opcode! {
-    /// Send a message on a socket, equivalent to `send(2)`.
+    /// Send a message on a socket, equivalent to `sendmsg(2)`.
     ///
-    /// fd must be set to the socket file descriptor, addr must contains a pointer to the msghdr
+    /// fd must be set to the socket file descriptor, msg must contain a pointer to the msghdr
     /// structure, and flags holds the flags associated with the system call.
-    #[derive(Debug)]
-    pub struct SendMsg {
-        fd: { impl sealed::UseFixed },
-        msg: { *const libc::msghdr },
-        ;;
-        ioprio: u16 = 0,
-        flags: u32 = 0
-    }
+    /// The message header must stay valid until the operation completes.
+    pub struct SendMsg = sys::IORING_OP_SENDMSG;
 
-    pub const CODE = sys::IORING_OP_SENDMSG;
-
-    pub fn build(self) -> Entry {
-        let SendMsg { fd, msg, ioprio, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, msg: *const libc::msghdr) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = msg as _;
         sqe.len = 1;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
-        Entry(sqe)
     }
 }
 
@@ -544,30 +397,25 @@ opcode! {
     /// Receive a message on a socket, equivalent to `recvmsg(2)`.
     ///
     /// See also the description of [`SendMsg`].
-    #[derive(Debug)]
-    pub struct RecvMsg {
-        fd: { impl sealed::UseFixed },
-        msg: { *mut libc::msghdr },
-        ;;
-        ioprio: u16 = 0,
-        flags: u32 = 0,
-        buf_group: u16 = 0
-    }
+    pub struct RecvMsg = sys::IORING_OP_RECVMSG;
 
-    pub const CODE = sys::IORING_OP_RECVMSG;
-
-    pub fn build(self) -> Entry {
-        let RecvMsg { fd, msg, ioprio, flags, buf_group } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, msg: *mut libc::msghdr) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = msg as _;
         sqe.len = 1;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
+    }
+
+    fn buf_group(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
-        Entry(sqe)
     }
 }
 
@@ -594,31 +442,24 @@ opcode! {
     /// components.
     ///
     /// The recvmsg multishot variant is available since kernel 6.0.
-    #[derive(Debug)]
-    pub struct RecvMsgMulti {
-        fd: { impl sealed::UseFixed },
-        msg: { *const libc::msghdr },
-        buf_group: { u16 },
-        ;;
-        ioprio: u16 = 0,
-        flags: u32 = 0
-    }
+    pub struct RecvMsgMulti = sys::IORING_OP_RECVMSG;
 
-    pub const CODE = sys::IORING_OP_RECVMSG;
-
-    pub fn build(self) -> Entry {
-        let RecvMsgMulti { fd, msg, buf_group, ioprio, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, msg: *const libc::msghdr, buf_group: u16) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = msg as _;
         sqe.len = 1;
-        sqe.__bindgen_anon_3.msg_flags = flags;
         sqe.__bindgen_anon_4.buf_group = buf_group;
-        sqe.flags |= crate::squeue::Flags::BUFFER_SELECT.bits();
-        sqe.ioprio = ioprio | (sys::IORING_RECV_MULTISHOT as u16);
-        Entry(sqe)
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+        sqe.ioprio = sys::IORING_RECV_MULTISHOT as _;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn flags(sqe, flags: u32) {
+        sqe.__bindgen_anon_3.msg_flags = flags;
     }
 }
 
@@ -631,31 +472,23 @@ opcode! {
     /// The request will complete with `-ETIME` if the timeout got completed through expiration of the timer,
     /// or 0 if the timeout got completed through requests completing on their own.
     /// If the timeout was cancelled before it expired, the request will complete with `-ECANCELED`.
-    #[derive(Debug)]
-    pub struct Timeout {
-        timespec: { *const types::Timespec },
-        ;;
-        /// `count` may contain a completion event count.
-        /// If [`TimeoutFlags::MULTISHOT`](types::TimeoutFlags::MULTISHOT) is set in `flags`, this is the number of repeats.
-        /// A value of 0 means the timeout is indefinite and can only be stopped by a removal request.
-        count: u32 = 0,
+    pub struct Timeout = sys::IORING_OP_TIMEOUT;
 
-        flags: types::TimeoutFlags = types::TimeoutFlags::empty()
-    }
-
-    pub const CODE = sys::IORING_OP_TIMEOUT;
-
-    pub fn build(self) -> Entry {
-        let Timeout { timespec, count, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, timespec: *const types::Timespec) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = timespec as _;
         sqe.len = 1;
+    }
+
+    /// `count` may contain a completion event count.
+    /// If [`TimeoutFlags::MULTISHOT`](types::TimeoutFlags::MULTISHOT) is set in `flags`, this is the number of repeats.
+    /// A value of 0 means the timeout is indefinite and can only be stopped by a removal request.
+    fn count(sqe, count: u32) {
         sqe.__bindgen_anon_1.off = count as _;
+    }
+
+    fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits();
-        Entry(sqe)
     }
 }
 
@@ -663,127 +496,82 @@ opcode! {
 
 opcode! {
     /// Attempt to remove an existing [timeout operation](Timeout).
-    pub struct TimeoutRemove {
-        user_data: { u64 },
-        ;;
-    }
+    pub struct TimeoutRemove = sys::IORING_OP_TIMEOUT_REMOVE;
 
-    pub const CODE = sys::IORING_OP_TIMEOUT_REMOVE;
-
-    pub fn build(self) -> Entry {
-        let TimeoutRemove { user_data } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, user_data: u64) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = user_data;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Attempt to update an existing [timeout operation](Timeout) with a new timespec.
     /// The optional `count` value of the original timeout value cannot be updated.
-    pub struct TimeoutUpdate {
-        user_data: { u64 },
-        timespec: { *const types::Timespec },
-        ;;
-        flags: types::TimeoutFlags = types::TimeoutFlags::empty()
-    }
+    pub struct TimeoutUpdate = sys::IORING_OP_TIMEOUT_REMOVE;
 
-    pub const CODE = sys::IORING_OP_TIMEOUT_REMOVE;
-
-    pub fn build(self) -> Entry {
-        let TimeoutUpdate { user_data, timespec, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, user_data: u64, timespec: *const types::Timespec) {
         sqe.fd = -1;
         sqe.__bindgen_anon_1.off = timespec as _;
         sqe.__bindgen_anon_2.addr = user_data;
+        sqe.__bindgen_anon_3.timeout_flags = sys::IORING_TIMEOUT_UPDATE;
+    }
+
+    fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits() | sys::IORING_TIMEOUT_UPDATE;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Accept a new connection on a socket, equivalent to `accept4(2)`.
-    pub struct Accept {
-        fd: { impl sealed::UseFixed },
-        addr: { *mut libc::sockaddr },
-        addrlen: { *mut libc::socklen_t },
-        ;;
-        file_index: Option<types::DestinationSlot> = None,
-        flags: i32 = 0
-    }
+    pub struct Accept = sys::IORING_OP_ACCEPT;
 
-    pub const CODE = sys::IORING_OP_ACCEPT;
-
-    pub fn build(self) -> Entry {
-        let Accept { fd, addr, addrlen, file_index, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, addr: *mut libc::sockaddr, addrlen: *mut libc::socklen_t) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = addr as _;
         sqe.__bindgen_anon_1.addr2 = addrlen as _;
+    }
+
+    fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
+        sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
-        if let Some(dest) = file_index {
-            sqe.__bindgen_anon_5.file_index = dest.kernel_index_arg();
-        }
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Set a socket option.
-    pub struct SetSockOpt {
-        fd: { impl sealed::UseFixed },
-        level: { u32 },
-        optname: { u32 },
-        optval: { *const libc::c_void },
-        optlen: { u32 },
-        ;;
-        flags: u32 = 0
-    }
+    pub struct SetSockOpt = sys::IORING_OP_URING_CMD;
 
-    pub const CODE = sys::IORING_OP_URING_CMD;
-
-    pub fn build(self) -> Entry {
-        let SetSockOpt { fd, level, optname, optval, optlen, flags } = self;
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        level: u32,
+        optname: u32,
+        optval: *const libc::c_void,
+        optlen: u32,
+    ) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = sys::SOCKET_URING_OP_SETSOCKOPT;
-
         sqe.__bindgen_anon_2.__bindgen_anon_1.level = level;
         sqe.__bindgen_anon_2.__bindgen_anon_1.optname = optname;
-        sqe.__bindgen_anon_3.uring_cmd_flags = flags;
         sqe.__bindgen_anon_5.optlen = optlen;
         unsafe { *sqe.__bindgen_anon_6.optval.as_mut() = optval as u64 };
-        Entry(sqe)
+    }
+
+    fn flags(sqe, flags: u32) {
+        sqe.__bindgen_anon_3.uring_cmd_flags = flags;
     }
 }
 
 opcode! {
     /// Attempt to cancel an already issued request.
-    pub struct AsyncCancel {
-        user_data: { u64 }
-        ;;
+    pub struct AsyncCancel = sys::IORING_OP_ASYNC_CANCEL;
 
-        // TODO flags
-    }
-
-    pub const CODE = sys::IORING_OP_ASYNC_CANCEL;
-
-    pub fn build(self) -> Entry {
-        let AsyncCancel { user_data } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, user_data: u64) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = user_data;
-        Entry(sqe)
     }
 }
 
@@ -791,47 +579,27 @@ opcode! {
     /// This request must be linked with another request through
     /// [`Flags::IO_LINK`](crate::squeue::Flags::IO_LINK) which is described below.
     /// Unlike [`Timeout`], [`LinkTimeout`] acts on the linked request, not the completion queue.
-    pub struct LinkTimeout {
-        timespec: { *const types::Timespec },
-        ;;
-        flags: types::TimeoutFlags = types::TimeoutFlags::empty()
-    }
+    pub struct LinkTimeout = sys::IORING_OP_LINK_TIMEOUT;
 
-    pub const CODE = sys::IORING_OP_LINK_TIMEOUT;
-
-    pub fn build(self) -> Entry {
-        let LinkTimeout { timespec, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, timespec: *const types::Timespec) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = timespec as _;
         sqe.len = 1;
+    }
+
+    fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits();
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Connect a socket, equivalent to `connect(2)`.
-    pub struct Connect {
-        fd: { impl sealed::UseFixed },
-        addr: { *const libc::sockaddr },
-        addrlen: { libc::socklen_t }
-        ;;
-    }
+    pub struct Connect = sys::IORING_OP_CONNECT;
 
-    pub const CODE = sys::IORING_OP_CONNECT;
-
-    pub fn build(self) -> Entry {
-        let Connect { fd, addr, addrlen } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, addr: *const libc::sockaddr, addrlen: libc::socklen_t) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = addr as _;
         sqe.__bindgen_anon_1.off = addrlen as _;
-        Entry(sqe)
     }
 }
 
@@ -839,55 +607,41 @@ opcode! {
 
 opcode! {
     /// Preallocate or deallocate space to a file, equivalent to `fallocate(2)`.
-    pub struct Fallocate {
-        fd: { impl sealed::UseFixed },
-        len: { u64 },
-        ;;
-        offset: u64 = 0,
-        mode: i32 = 0
+    pub struct Fallocate = sys::IORING_OP_FALLOCATE;
+
+    fn new(sqe, fd: impl sealed::UseFixed, len: u64) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_2.addr = len;
     }
 
-    pub const CODE = sys::IORING_OP_FALLOCATE;
-
-    pub fn build(self) -> Entry {
-        let Fallocate { fd, len, offset, mode } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_2.addr = len;
-        sqe.len = mode as _;
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
-        Entry(sqe)
+    }
+
+    fn mode(sqe, mode: i32) {
+        sqe.len = mode as _;
     }
 }
 
 opcode! {
     /// Open a file, equivalent to `openat(2)`.
-    pub struct OpenAt {
-        dirfd: { impl sealed::UseFd },
-        pathname: { *const libc::c_char },
-        ;;
-        file_index: Option<types::DestinationSlot> = None,
-        flags: i32 = 0,
-        mode: libc::mode_t = 0
+    pub struct OpenAt = sys::IORING_OP_OPENAT;
+
+    fn new(sqe, dirfd: impl sealed::UseFd, pathname: *const libc::c_char) {
+        sqe.fd = sealed::UseFd::into(dirfd);
+        sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
-    pub const CODE = sys::IORING_OP_OPENAT;
+    fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
+        sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
+    }
 
-    pub fn build(self) -> Entry {
-        let OpenAt { dirfd, pathname, file_index, flags, mode } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = dirfd;
-        sqe.__bindgen_anon_2.addr = pathname as _;
-        sqe.len = mode;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.open_flags = flags as _;
-        if let Some(dest) = file_index {
-            sqe.__bindgen_anon_5.file_index = dest.kernel_index_arg();
-        }
-        Entry(sqe)
+    }
+
+    fn mode(sqe, mode: libc::mode_t) {
+        sqe.len = mode;
     }
 }
 
@@ -895,26 +649,16 @@ opcode! {
     /// Close a file descriptor, equivalent to `close(2)`.
     ///
     /// Use a types::Fixed(fd) argument to close an io_uring direct descriptor.
-    pub struct Close {
-        fd: { impl sealed::UseFixed },
-        ;;
-    }
+    pub struct Close = sys::IORING_OP_CLOSE;
 
-    pub const CODE = sys::IORING_OP_CLOSE;
-
-    pub fn build(self) -> Entry {
-        let Close { fd } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        match fd {
+    fn new(sqe, fd: impl sealed::UseFixed) {
+        match sealed::UseFixed::into(fd) {
             sealed::Target::Fd(fd) => sqe.fd = fd,
             sealed::Target::Fixed(idx) => {
                 sqe.fd = 0;
                 sqe.__bindgen_anon_5.file_index = idx + 1;
             }
         }
-        Entry(sqe)
     }
 }
 
@@ -922,55 +666,40 @@ opcode! {
     /// This command is an alternative to using
     /// [`Submitter::register_files_update`](crate::Submitter::register_files_update) which then
     /// works in an async fashion, like the rest of the io_uring commands.
-    pub struct FilesUpdate {
-        fds: { *const RawFd },
-        len: { u32 },
-        ;;
-        offset: i32 = 0
-    }
+    pub struct FilesUpdate = sys::IORING_OP_FILES_UPDATE;
 
-    pub const CODE = sys::IORING_OP_FILES_UPDATE;
-
-    pub fn build(self) -> Entry {
-        let FilesUpdate { fds, len, offset } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, fds: *const RawFd, len: u32) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = fds as _;
         sqe.len = len;
+    }
+
+    fn offset(sqe, offset: i32) {
         sqe.__bindgen_anon_1.off = offset as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Get file status, equivalent to `statx(2)`.
-    pub struct Statx {
-        dirfd: { impl sealed::UseFd },
-        pathname: { *const libc::c_char },
-        statxbuf: { *mut types::statx },
-        ;;
-        flags: i32 = 0,
-        mask: u32 = 0
-    }
+    pub struct Statx = sys::IORING_OP_STATX;
 
-    pub const CODE = sys::IORING_OP_STATX;
-
-    pub fn build(self) -> Entry {
-        let Statx {
-            dirfd, pathname, statxbuf,
-            flags, mask
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = dirfd;
+    fn new(
+        sqe,
+        dirfd: impl sealed::UseFd,
+        pathname: *const libc::c_char,
+        statxbuf: *mut types::statx,
+    ) {
+        sqe.fd = sealed::UseFd::into(dirfd);
         sqe.__bindgen_anon_2.addr = pathname as _;
-        sqe.len = mask;
         sqe.__bindgen_anon_1.off = statxbuf as _;
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.statx_flags = flags as _;
-        Entry(sqe)
+    }
+
+    fn mask(sqe, mask: u32) {
+        sqe.len = mask;
     }
 }
 
@@ -985,42 +714,34 @@ opcode! {
     /// See also `read(2)` and `write(2)` for the general description of the related system call.
     ///
     /// Available since 5.6.
-    pub struct Read {
-        fd: { impl sealed::UseFixed },
-        buf: { *mut u8 },
-        len: { u32 },
-        ;;
-        /// `offset` contains the read or write offset.
-        ///
-        /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
-        /// If `offset` is set to `-1`, the offset will use (and advance) the file position,
-        /// like the `read(2)` and `write(2)` system calls.
-        offset: u64 = 0,
-        ioprio: u16 = 0,
-        rw_flags: i32 = 0,
-        buf_group: u16 = 0
-    }
+    pub struct Read = sys::IORING_OP_READ;
 
-    pub const CODE = sys::IORING_OP_READ;
-
-    pub fn build(self) -> Entry {
-        let Read {
-            fd,
-            buf, len, offset,
-            ioprio, rw_flags,
-            buf_group
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *mut u8, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
+    }
+
+    /// `offset` contains the read or write offset.
+    ///
+    /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
+    /// If `offset` is set to `-1`, the offset will use (and advance) the file position,
+    /// like the `read(2)` and `write(2)` system calls.
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    fn buf_group(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
-        Entry(sqe)
     }
 }
 
@@ -1035,193 +756,129 @@ opcode! {
     /// See also `read(2)` and `write(2)` for the general description of the related system call.
     ///
     /// Available since 5.6.
-    pub struct Write {
-        fd: { impl sealed::UseFixed },
-        buf: { *const u8 },
-        len: { u32 },
-        ;;
-        /// `offset` contains the read or write offset.
-        ///
-        /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
-        /// If `offsett` is set to `-1`, the offset will use (and advance) the file position,
-        /// like the `read(2)` and `write(2)` system calls.
-        offset: u64 = 0,
-        ioprio: u16 = 0,
-        rw_flags: i32 = 0,
-        /// `write_stream` identifies a write stream, added in Linux 6.16
-        /// (used by NVMe FDP, for example). `0` means no stream.
-        /// Older kernels ignore this field.
-        write_stream: u8 = 0
-    }
+    pub struct Write = sys::IORING_OP_WRITE;
 
-    pub const CODE = sys::IORING_OP_WRITE;
-
-    pub fn build(self) -> Entry {
-        let Write {
-            fd,
-            buf, len, offset,
-            ioprio, rw_flags,
-            write_stream
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *const u8, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
+    }
+
+    /// `offset` contains the read or write offset.
+    ///
+    /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
+    /// If `offset` is set to `-1`, the offset will use (and advance) the file position,
+    /// like the `read(2)` and `write(2)` system calls.
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    /// `write_stream` identifies a write stream, added in Linux 6.16
+    /// (used by NVMe FDP, for example). `0` means no stream.
+    /// Older kernels ignore this field.
+    fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Predeclare an access pattern for file data, equivalent to `posix_fadvise(2)`.
-    pub struct Fadvise {
-        fd: { impl sealed::UseFixed },
-        len: { libc::off_t },
-        advice: { i32 },
-        ;;
-        offset: u64 = 0,
+    pub struct Fadvise = sys::IORING_OP_FADVISE;
+
+    fn new(sqe, fd: impl sealed::UseFixed, len: libc::off_t, advice: i32) {
+        assign_fd!(sqe, fd);
+        sqe.len = len as _;
+        sqe.__bindgen_anon_3.fadvise_advice = advice as _;
     }
 
-    pub const CODE = sys::IORING_OP_FADVISE;
-
-    pub fn build(self) -> Entry {
-        let Fadvise { fd, len, advice, offset } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len as _;
+    fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
-        sqe.__bindgen_anon_3.fadvise_advice = advice as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Give advice about use of memory, equivalent to `madvise(2)`.
-    pub struct Madvise {
-        addr: { *const libc::c_void },
-        len: { libc::off_t },
-        advice: { i32 },
-        ;;
-    }
+    pub struct Madvise = sys::IORING_OP_MADVISE;
 
-    pub const CODE = sys::IORING_OP_MADVISE;
-
-    pub fn build(self) -> Entry {
-        let Madvise { addr, len, advice } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, addr: *const libc::c_void, len: libc::off_t, advice: i32) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = addr as _;
         sqe.len = len as _;
         sqe.__bindgen_anon_3.fadvise_advice = advice as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Send a message on a socket, equivalent to `send(2)`.
-    pub struct Send {
-        fd: { impl sealed::UseFixed },
-        buf: { *const u8 },
-        len: { u32 },
-        ;;
-        ioprio: u16 = 0,
-        flags: i32 = 0,
+    pub struct Send = sys::IORING_OP_SEND;
 
-        /// Set the destination address, for sending from an unconnected socket.
-        ///
-        /// When set, `dest_addr_len` must be set as well.
-        /// See also `man 3 io_uring_prep_send_set_addr`.
-        dest_addr: *const libc::sockaddr = core::ptr::null(),
-        dest_addr_len: libc::socklen_t = 0,
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *const u8, len: u32) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_2.addr = buf as _;
+        sqe.len = len;
     }
 
-    pub const CODE = sys::IORING_OP_SEND;
-
-    pub fn build(self) -> Entry {
-        let Send { fd, buf, len, ioprio, flags, dest_addr, dest_addr_len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_2.addr = buf as _;
-        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
-        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
-        sqe.len = len;
-        sqe.ioprio = ioprio;
-        sqe.__bindgen_anon_3.msg_flags = flags as _;
-        Entry(sqe)
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
     }
 
-    pub fn build_into(self, entry: &mut Entry) {
-        let Send { fd, buf, len, ioprio, flags, dest_addr, dest_addr_len } = self;
-
-        let sqe = &mut entry.0;
-        sqe.ioprio = ioprio;
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_2.addr = buf as _;
-        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
-        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
-        sqe.len = len;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
+
+    /// Set the destination address, for sending from an unconnected socket.
+    ///
+    /// When set, `dest_addr_len` must be set as well.
+    /// See also `man 3 io_uring_prep_send_set_addr`.
+    fn dest_addr(sqe, dest_addr: *const libc::sockaddr) {
+        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
+    }
+
+    fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
+        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
     }
 }
 
 opcode! {
     /// Receive a message from a socket, equivalent to `recv(2)`.
-    pub struct Recv {
-        fd: { impl sealed::UseFixed },
-        buf: { *mut u8 },
-        len: { u32 },
-        ;;
-        ioprio: u16 = 0,
-        flags: i32 = 0,
-        buf_group: u16 = 0
-    }
+    pub struct Recv = sys::IORING_OP_RECV;
 
-    pub const CODE = sys::IORING_OP_RECV;
-
-    pub fn build(self) -> Entry {
-        let Recv { fd, buf, len, ioprio, flags, buf_group } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *mut u8, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
-        sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-        Entry(sqe)
     }
 
-    pub fn build_into(self, entry: &mut Entry) {
-        let Recv { fd, buf, len, ioprio, flags, buf_group } = self;
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
 
-        let sqe = &mut entry.0;
-        assign_fd!(sqe.fd = fd);
-        sqe.opcode = Self::CODE;
-        sqe.ioprio = ioprio;
-        sqe.__bindgen_anon_2.addr = buf as _;
-        sqe.len = len;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
+
+    fn buf_group(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
     }
-}
 
-impl Recv {
-    #[inline]
-    pub fn set_ioprio(&mut self, ioprio: u16) {
-        self.ioprio = ioprio;
+    /// Receive into a buffer selected from the provided buffer group `buf_group`.
+    ///
+    /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
+    /// flag, the length limits the size of the selected buffer.
+    fn buffer_select(sqe, buf_group: u16) {
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 }
 
@@ -1240,82 +897,60 @@ opcode! {
     /// the multishot receive will be done and the application should issue a new request.
     ///
     /// Multishot variants are available since kernel 6.0.
+    pub struct RecvMulti = sys::IORING_OP_RECV;
 
-    pub struct RecvMulti {
-        fd: { impl sealed::UseFixed },
-        buf_group: { u16 },
-        ;;
-        flags: i32 = 0,
-        len: u32 = 0,
+    fn new(sqe, fd: impl sealed::UseFixed, buf_group: u16) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+        sqe.ioprio = sys::IORING_RECV_MULTISHOT as _;
     }
 
-    pub const CODE = sys::IORING_OP_RECV;
-
-    pub fn build(self) -> Entry {
-        let RecvMulti { fd, buf_group, flags, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-        sqe.flags |= crate::squeue::Flags::BUFFER_SELECT.bits();
-        sqe.ioprio = sys::IORING_RECV_MULTISHOT as _;
-        Entry(sqe)
+    }
+
+    fn len(sqe, len: u32) {
+        sqe.len = len;
     }
 }
 
 opcode! {
     /// Open a file, equivalent to `openat2(2)`.
-    pub struct OpenAt2 {
-        dirfd: { impl sealed::UseFd },
-        pathname: { *const libc::c_char },
-        how: { *const types::OpenHow }
-        ;;
-        file_index: Option<types::DestinationSlot> = None,
-    }
+    pub struct OpenAt2 = sys::IORING_OP_OPENAT2;
 
-    pub const CODE = sys::IORING_OP_OPENAT2;
-
-    pub fn build(self) -> Entry {
-        let OpenAt2 { dirfd, pathname, how, file_index } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = dirfd;
+    fn new(
+        sqe,
+        dirfd: impl sealed::UseFd,
+        pathname: *const libc::c_char,
+        how: *const types::OpenHow,
+    ) {
+        sqe.fd = sealed::UseFd::into(dirfd);
         sqe.__bindgen_anon_2.addr = pathname as _;
         sqe.len = mem::size_of::<sys::open_how>() as _;
         sqe.__bindgen_anon_1.off = how as _;
-        if let Some(dest) = file_index {
-            sqe.__bindgen_anon_5.file_index = dest.kernel_index_arg();
-        }
-        Entry(sqe)
+    }
+
+    fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
+        sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
 }
 
 opcode! {
     /// Modify an epoll file descriptor, equivalent to `epoll_ctl(2)`.
-    pub struct EpollCtl {
-        epfd: { impl sealed::UseFixed },
-        fd: { impl sealed::UseFd },
-        op: { i32 },
-        ev: { *const types::epoll_event },
-        ;;
-    }
+    pub struct EpollCtl = sys::IORING_OP_EPOLL_CTL;
 
-    pub const CODE = sys::IORING_OP_EPOLL_CTL;
-
-    pub fn build(self) -> Entry {
-        let EpollCtl { epfd, fd, op, ev } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = epfd);
+    fn new(
+        sqe,
+        epfd: impl sealed::UseFixed,
+        fd: impl sealed::UseFd,
+        op: i32,
+        ev: *const types::epoll_event,
+    ) {
+        assign_fd!(sqe, epfd);
         sqe.__bindgen_anon_2.addr = ev as _;
         sqe.len = op as _;
-        sqe.__bindgen_anon_1.off = fd as _;
-        Entry(sqe)
+        sqe.__bindgen_anon_1.off = sealed::UseFd::into(fd) as _;
     }
 }
 
@@ -1326,39 +961,32 @@ opcode! {
     ///
     /// if `fd_in` refers to a pipe, `off_in` must be `-1`;
     /// The description of `off_in` also applied to `off_out`.
-    pub struct Splice {
-        fd_in: { impl sealed::UseFixed },
-        off_in: { i64 },
-        fd_out: { impl sealed::UseFixed },
-        off_out: { i64 },
-        len: { u32 },
-        ;;
-        /// see man `splice(2)` for description of flags.
-        flags: u32 = 0
-    }
+    pub struct Splice = sys::IORING_OP_SPLICE;
 
-    pub const CODE = sys::IORING_OP_SPLICE;
-
-    pub fn build(self) -> Entry {
-        let Splice { fd_in, off_in, fd_out, off_out, len, mut flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd_out);
+    fn new(
+        sqe,
+        fd_in: impl sealed::UseFixed,
+        off_in: i64,
+        fd_out: impl sealed::UseFixed,
+        off_out: i64,
+        len: u32,
+    ) {
+        assign_fd!(sqe, fd_out);
         sqe.len = len;
         sqe.__bindgen_anon_1.off = off_out as _;
-
-        sqe.__bindgen_anon_5.splice_fd_in = match fd_in {
+        sqe.__bindgen_anon_5.splice_fd_in = match sealed::UseFixed::into(fd_in) {
             sealed::Target::Fd(fd) => fd,
             sealed::Target::Fixed(idx) => {
-                flags |= sys::SPLICE_F_FD_IN_FIXED;
+                sqe.__bindgen_anon_3.splice_flags = sys::SPLICE_F_FD_IN_FIXED;
                 idx as _
             }
         };
-
         sqe.__bindgen_anon_2.splice_off_in = off_in as _;
-        sqe.__bindgen_anon_3.splice_flags = flags;
-        Entry(sqe)
+    }
+
+    /// see man `splice(2)` for description of flags, ORed with already set flags.
+    fn flags(sqe, flags: u32) {
+        unsafe { sqe.__bindgen_anon_3.splice_flags |= flags };
     }
 }
 
@@ -1366,50 +994,25 @@ opcode! {
     /// Register `nbufs` buffers that each have the length `len` with ids starting from `bid` in the
     /// group `bgid` that can be used for any request. See
     /// [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT) for more info.
-    pub struct ProvideBuffers {
-        addr: { *mut u8 },
-        len: { i32 },
-        nbufs: { u16 },
-        bgid: { u16 },
-        bid: { u16 }
-        ;;
-    }
+    pub struct ProvideBuffers = sys::IORING_OP_PROVIDE_BUFFERS;
 
-    pub const CODE = sys::IORING_OP_PROVIDE_BUFFERS;
-
-    pub fn build(self) -> Entry {
-        let ProvideBuffers { addr, len, nbufs, bgid, bid } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, addr: *mut u8, len: i32, nbufs: u16, bgid: u16, bid: u16) {
         sqe.fd = nbufs as _;
         sqe.__bindgen_anon_2.addr = addr as _;
         sqe.len = len as _;
         sqe.__bindgen_anon_1.off = bid as _;
         sqe.__bindgen_anon_4.buf_group = bgid;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Remove some number of buffers from a buffer group. See
     /// [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT) for more info.
-    pub struct RemoveBuffers {
-        nbufs: { u16 },
-        bgid: { u16 }
-        ;;
-    }
+    pub struct RemoveBuffers = sys::IORING_OP_REMOVE_BUFFERS;
 
-    pub const CODE = sys::IORING_OP_REMOVE_BUFFERS;
-
-    pub fn build(self) -> Entry {
-        let RemoveBuffers { nbufs, bgid } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, nbufs: u16, bgid: u16) {
         sqe.fd = nbufs as _;
         sqe.__bindgen_anon_4.buf_group = bgid;
-        Entry(sqe)
     }
 }
 
@@ -1417,36 +1020,23 @@ opcode! {
 
 opcode! {
     /// Duplicate pipe content, equivalent to `tee(2)`.
-    pub struct Tee {
-        fd_in: { impl sealed::UseFixed },
-        fd_out: { impl sealed::UseFixed },
-        len: { u32 }
-        ;;
-        flags: u32 = 0
-    }
+    pub struct Tee = sys::IORING_OP_TEE;
 
-    pub const CODE = sys::IORING_OP_TEE;
-
-    pub fn build(self) -> Entry {
-        let Tee { fd_in, fd_out, len, mut flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-
-        assign_fd!(sqe.fd = fd_out);
+    fn new(sqe, fd_in: impl sealed::UseFixed, fd_out: impl sealed::UseFixed, len: u32) {
+        assign_fd!(sqe, fd_out);
         sqe.len = len;
-
-        sqe.__bindgen_anon_5.splice_fd_in = match fd_in {
+        sqe.__bindgen_anon_5.splice_fd_in = match sealed::UseFixed::into(fd_in) {
             sealed::Target::Fd(fd) => fd,
             sealed::Target::Fixed(idx) => {
-                flags |= sys::SPLICE_F_FD_IN_FIXED;
+                sqe.__bindgen_anon_3.splice_flags = sys::SPLICE_F_FD_IN_FIXED;
                 idx as _
             }
         };
+    }
 
-        sqe.__bindgen_anon_3.splice_flags = flags;
-
-        Entry(sqe)
+    /// Flags, ORed with already set flags.
+    fn flags(sqe, flags: u32) {
+        unsafe { sqe.__bindgen_anon_3.splice_flags |= flags };
     }
 }
 
@@ -1455,78 +1045,49 @@ opcode! {
 opcode! {
     /// Shut down all or part of a full duplex connection on a socket, equivalent to `shutdown(2)`.
     /// Available since kernel 5.11.
-    pub struct Shutdown {
-        fd: { impl sealed::UseFixed },
-        how: { i32 },
-        ;;
-    }
+    pub struct Shutdown = sys::IORING_OP_SHUTDOWN;
 
-    pub const CODE = sys::IORING_OP_SHUTDOWN;
-
-    pub fn build(self) -> Entry {
-        let Shutdown { fd, how } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, how: i32) {
+        assign_fd!(sqe, fd);
         sqe.len = how as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
-    // Change the name or location of a file, equivalent to `renameat2(2)`.
-    // Available since kernel 5.11.
-    pub struct RenameAt {
-        olddirfd: { impl sealed::UseFd },
-        oldpath: { *const libc::c_char },
-        newdirfd: { impl sealed::UseFd },
-        newpath: { *const libc::c_char },
-        ;;
-        flags: u32 = 0
-    }
+    /// Change the name or location of a file, equivalent to `renameat2(2)`.
+    /// Available since kernel 5.11.
+    pub struct RenameAt = sys::IORING_OP_RENAMEAT;
 
-    pub const CODE = sys::IORING_OP_RENAMEAT;
-
-    pub fn build(self) -> Entry {
-        let RenameAt {
-            olddirfd, oldpath,
-            newdirfd, newpath,
-            flags
-        } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = olddirfd;
+    fn new(
+        sqe,
+        olddirfd: impl sealed::UseFd,
+        oldpath: *const libc::c_char,
+        newdirfd: impl sealed::UseFd,
+        newpath: *const libc::c_char,
+    ) {
+        sqe.fd = sealed::UseFd::into(olddirfd);
         sqe.__bindgen_anon_2.addr = oldpath as _;
-        sqe.len = newdirfd as _;
+        sqe.len = sealed::UseFd::into(newdirfd) as _;
         sqe.__bindgen_anon_1.off = newpath as _;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.rename_flags = flags;
-        Entry(sqe)
     }
 }
 
 opcode! {
-    // Delete a name and possible the file it refers to, equivalent to `unlinkat(2)`.
-    // Available since kernel 5.11.
-    pub struct UnlinkAt {
-        dirfd: { impl sealed::UseFd },
-        pathname: { *const libc::c_char },
-        ;;
-        flags: i32 = 0
+    /// Delete a name and possible the file it refers to, equivalent to `unlinkat(2)`.
+    /// Available since kernel 5.11.
+    pub struct UnlinkAt = sys::IORING_OP_UNLINKAT;
+
+    fn new(sqe, dirfd: impl sealed::UseFd, pathname: *const libc::c_char) {
+        sqe.fd = sealed::UseFd::into(dirfd);
+        sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
-    pub const CODE = sys::IORING_OP_UNLINKAT;
-
-    pub fn build(self) -> Entry {
-        let UnlinkAt { dirfd, pathname, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = dirfd;
-        sqe.__bindgen_anon_2.addr = pathname as _;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.unlink_flags = flags as _;
-        Entry(sqe)
     }
 }
 
@@ -1534,74 +1095,53 @@ opcode! {
 
 opcode! {
     /// Make a directory, equivalent to `mkdirat(2)`.
-    pub struct MkDirAt {
-        dirfd: { impl sealed::UseFd },
-        pathname: { *const libc::c_char },
-        ;;
-        mode: libc::mode_t = 0
+    pub struct MkDirAt = sys::IORING_OP_MKDIRAT;
+
+    fn new(sqe, dirfd: impl sealed::UseFd, pathname: *const libc::c_char) {
+        sqe.fd = sealed::UseFd::into(dirfd);
+        sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
-    pub const CODE = sys::IORING_OP_MKDIRAT;
-
-    pub fn build(self) -> Entry {
-        let MkDirAt { dirfd, pathname, mode } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = dirfd;
-        sqe.__bindgen_anon_2.addr = pathname as _;
+    fn mode(sqe, mode: libc::mode_t) {
         sqe.len = mode;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Create a symlink, equivalent to `symlinkat(2)`.
-    pub struct SymlinkAt {
-        newdirfd: { impl sealed::UseFd },
-        target: { *const libc::c_char },
-        linkpath: { *const libc::c_char },
-        ;;
-    }
+    pub struct SymlinkAt = sys::IORING_OP_SYMLINKAT;
 
-    pub const CODE = sys::IORING_OP_SYMLINKAT;
-
-    pub fn build(self) -> Entry {
-        let SymlinkAt { newdirfd, target, linkpath } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = newdirfd;
+    fn new(
+        sqe,
+        newdirfd: impl sealed::UseFd,
+        target: *const libc::c_char,
+        linkpath: *const libc::c_char,
+    ) {
+        sqe.fd = sealed::UseFd::into(newdirfd);
         sqe.__bindgen_anon_2.addr = target as _;
         sqe.__bindgen_anon_1.addr2 = linkpath as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Create a hard link, equivalent to `linkat(2)`.
-    pub struct LinkAt {
-        olddirfd: { impl sealed::UseFd },
-        oldpath: { *const libc::c_char },
-        newdirfd: { impl sealed::UseFd },
-        newpath: { *const libc::c_char },
-        ;;
-        flags: i32 = 0
+    pub struct LinkAt = sys::IORING_OP_LINKAT;
+
+    fn new(
+        sqe,
+        olddirfd: impl sealed::UseFd,
+        oldpath: *const libc::c_char,
+        newdirfd: impl sealed::UseFd,
+        newpath: *const libc::c_char,
+    ) {
+        sqe.fd = sealed::UseFd::into(olddirfd);
+        sqe.__bindgen_anon_2.addr = oldpath as _;
+        sqe.len = sealed::UseFd::into(newdirfd) as _;
+        sqe.__bindgen_anon_1.addr2 = newpath as _;
     }
 
-    pub const CODE = sys::IORING_OP_LINKAT;
-
-    pub fn build(self) -> Entry {
-        let LinkAt { olddirfd, oldpath, newdirfd, newpath, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = olddirfd as _;
-        sqe.__bindgen_anon_2.addr = oldpath as _;
-        sqe.len = newdirfd as _;
-        sqe.__bindgen_anon_1.addr2 = newpath as _;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.hardlink_flags = flags as _;
-        Entry(sqe)
     }
 }
 
@@ -1609,107 +1149,81 @@ opcode! {
 
 opcode! {
     /// Get extended attribute, equivalent to `getxattr(2)`.
-    pub struct GetXattr {
-        name: { *const libc::c_char },
-        value: { *mut libc::c_void },
-        path: { *const libc::c_char },
-        len: { u32 },
-        ;;
-    }
+    pub struct GetXattr = sys::IORING_OP_GETXATTR;
 
-    pub const CODE = sys::IORING_OP_GETXATTR;
-
-    pub fn build(self) -> Entry {
-        let GetXattr { name, value, path, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(
+        sqe,
+        name: *const libc::c_char,
+        value: *mut libc::c_void,
+        path: *const libc::c_char,
+        len: u32,
+    ) {
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = path as _ };
-        sqe.__bindgen_anon_3.xattr_flags = 0;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Set extended attribute, equivalent to `setxattr(2)`.
-    pub struct SetXattr {
-        name: { *const libc::c_char },
-        value: { *const libc::c_void },
-        path: { *const libc::c_char },
-        len: { u32 },
-        ;;
-        flags: i32 = 0
-    }
+    pub struct SetXattr = sys::IORING_OP_SETXATTR;
 
-    pub const CODE = sys::IORING_OP_SETXATTR;
-
-    pub fn build(self) -> Entry {
-        let SetXattr { name, value, path, flags, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(
+        sqe,
+        name: *const libc::c_char,
+        value: *const libc::c_void,
+        path: *const libc::c_char,
+        len: u32,
+    ) {
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = path as _ };
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.xattr_flags = flags as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Get extended attribute from a file descriptor, equivalent to `fgetxattr(2)`.
-    pub struct FGetXattr {
-        fd: { impl sealed::UseFixed },
-        name: { *const libc::c_char },
-        value: { *mut libc::c_void },
-        len: { u32 },
-        ;;
-    }
+    pub struct FGetXattr = sys::IORING_OP_FGETXATTR;
 
-    pub const CODE = sys::IORING_OP_FGETXATTR;
-
-    pub fn build(self) -> Entry {
-        let FGetXattr { fd, name, value, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        name: *const libc::c_char,
+        value: *mut libc::c_void,
+        len: u32,
+    ) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
-        sqe.__bindgen_anon_3.xattr_flags = 0;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Set extended attribute on a file descriptor, equivalent to `fsetxattr(2)`.
-    pub struct FSetXattr {
-        fd: { impl sealed::UseFixed },
-        name: { *const libc::c_char },
-        value: { *const libc::c_void },
-        len: { u32 },
-        ;;
-        flags: i32 = 0
-    }
+    pub struct FSetXattr = sys::IORING_OP_FSETXATTR;
 
-    pub const CODE = sys::IORING_OP_FSETXATTR;
-
-    pub fn build(self) -> Entry {
-        let FSetXattr { fd, name, value, flags, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        name: *const libc::c_char,
+        value: *const libc::c_void,
+        len: u32,
+    ) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.xattr_flags = flags as _;
-        Entry(sqe)
     }
 }
 
@@ -1717,32 +1231,28 @@ opcode! {
 
 opcode! {
     /// Send a message (with data) to a target ring.
-    pub struct MsgRingData {
-        ring_fd: { impl sealed::UseFd },
-        result: { i32 },
-        user_data: { u64 },
-        user_flags: { Option<u32> },
-        ;;
-        opcode_flags: u32 = 0
-    }
+    pub struct MsgRingData = sys::IORING_OP_MSG_RING;
 
-    pub const CODE = sys::IORING_OP_MSG_RING;
-
-    pub fn build(self) -> Entry {
-        let MsgRingData { ring_fd, result, user_data, user_flags, opcode_flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(
+        sqe,
+        ring_fd: impl sealed::UseFd,
+        result: i32,
+        user_data: u64,
+        user_flags: Option<u32>,
+    ) {
         sqe.__bindgen_anon_2.addr = sys::IORING_MSG_DATA.into();
-        sqe.fd = ring_fd;
+        sqe.fd = sealed::UseFd::into(ring_fd);
         sqe.len = result as u32;
         sqe.__bindgen_anon_1.off = user_data;
-        sqe.__bindgen_anon_3.msg_ring_flags = opcode_flags;
         if let Some(flags) = user_flags {
             sqe.__bindgen_anon_5.file_index = flags;
-            unsafe {sqe.__bindgen_anon_3.msg_ring_flags |= sys::IORING_MSG_RING_FLAGS_PASS};
+            sqe.__bindgen_anon_3.msg_ring_flags = sys::IORING_MSG_RING_FLAGS_PASS;
         }
-        Entry(sqe)
+    }
+
+    /// Flags, ORed with already set flags.
+    fn opcode_flags(sqe, opcode_flags: u32) {
+        unsafe { sqe.__bindgen_anon_3.msg_ring_flags |= opcode_flags };
     }
 }
 
@@ -1752,108 +1262,114 @@ opcode! {
     /// Attempt to cancel an already issued request, receiving a cancellation
     /// builder, which allows for the new cancel criterias introduced since
     /// 5.19.
-    pub struct AsyncCancel2 {
-        builder: { types::CancelBuilder }
-        ;;
-    }
+    pub struct AsyncCancel2 = sys::IORING_OP_ASYNC_CANCEL;
 
-    pub const CODE = sys::IORING_OP_ASYNC_CANCEL;
-
-    pub fn build(self) -> Entry {
-        let AsyncCancel2 { builder } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, builder: types::CancelBuilder) {
         sqe.fd = builder.to_fd();
         sqe.__bindgen_anon_2.addr = builder.user_data.unwrap_or(0);
         sqe.__bindgen_anon_3.cancel_flags = builder.flags.bits();
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// A file/device-specific 16-byte command, akin (but not equivalent) to `ioctl(2)`.
-    pub struct UringCmd16 {
-        fd: { impl sealed::UseFixed },
-        cmd_op: { u32 },
-        ;;
-        /// The `buf_index` is an index into an array of fixed buffers,
-        /// and is only valid if fixed buffers were registered.
-        buf_index: Option<u16> = None,
-        /// Arbitrary command data.
-        cmd: [u8; 16] = [0u8; 16],
-        /// The `addr` is typically a pointer to buffer or iovecs,
-        /// but some file/device command also need to pass an addr.
-        /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
-        /// needs to set `addr` to some special value.
-        addr: Option<u64> = None,
+    pub struct UringCmd16 = sys::IORING_OP_URING_CMD;
+
+    fn new(sqe, fd: impl sealed::UseFixed, cmd_op: u32) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
     }
 
-    pub const CODE = sys::IORING_OP_URING_CMD;
-
-    pub fn build(self) -> Entry {
-        let UringCmd16 { fd, cmd_op, cmd, buf_index, addr } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
-        unsafe { *sqe.__bindgen_anon_6.cmd.as_mut().as_mut_ptr().cast::<[u8; 16]>() = cmd };
+    /// The `buf_index` is an index into an array of fixed buffers,
+    /// and is only valid if fixed buffers were registered.
+    fn buf_index(sqe, buf_index: Option<u16>) {
         if let Some(buf_index) = buf_index {
             sqe.__bindgen_anon_4.buf_index = buf_index;
-            unsafe {
-                sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED;
-            }
+            unsafe { sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED };
         }
+    }
+
+    /// Arbitrary command data.
+    fn cmd(sqe, cmd: [u8; 16]) {
+        unsafe { *sqe.__bindgen_anon_6.cmd.as_mut().as_mut_ptr().cast::<[u8; 16]>() = cmd };
+    }
+
+    /// The `addr` is typically a pointer to buffer or iovecs,
+    /// but some file/device command also need to pass an addr.
+    /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
+    /// needs to set `addr` to some special value.
+    fn addr(sqe, addr: Option<u64>) {
         if let Some(addr) = addr {
             sqe.__bindgen_anon_2.addr = addr;
         }
-        Entry(sqe)
     }
 }
 
-opcode! {
-    /// A file/device-specific 80-byte command, akin (but not equivalent) to `ioctl(2)`.
-    pub struct UringCmd80 {
-        fd: { impl sealed::UseFixed },
-        cmd_op: { u32 },
-        ;;
-        /// The `buf_index` is an index into an array of fixed buffers,
-        /// and is only valid if fixed buffers were registered.
-        buf_index: Option<u16> = None,
-        /// Arbitrary command data.
-        cmd: [u8; 80] = [0u8; 80],
-        /// The `addr` is typically a pointer to buffer or iovecs,
-        /// but some file/device command also need to pass an addr.
-        /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
-        /// needs to set `addr` to some special value.
-        addr: Option<u64> = None,
-    }
+/// A file/device-specific 80-byte command, akin (but not equivalent) to `ioctl(2)`.
+///
+/// Requires an [`Entry128`] submission queue.
+pub struct UringCmd80<'a> {
+    sqe: &'a mut sys::io_uring_sqe,
+    cmd2: &'a mut [u8; 64],
+}
 
-    pub const CODE = sys::IORING_OP_URING_CMD;
+impl<'a> UringCmd80<'a> {
+    /// The opcode of the operation. This can be passed to
+    /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
+    /// supported with the current kernel.
+    pub const CODE: u8 = sys::IORING_OP_URING_CMD as _;
 
-    pub fn build(self) -> Entry128 {
-        let UringCmd80 { fd, cmd_op, cmd, buf_index, addr } = self;
-
-        let cmd1 = cmd[..16].try_into().unwrap();
-        let cmd2 = cmd[16..].try_into().unwrap();
-
-        let mut sqe = sqe_zeroed();
+    #[inline]
+    pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
+        let Entry128(entry, cmd2) = entry;
+        let sqe = &mut entry.0;
         sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
-        unsafe { *sqe.__bindgen_anon_6.cmd.as_mut().as_mut_ptr().cast::<[u8; 16]>() = cmd1 };
-        if let Some(buf_index) = buf_index {
-            sqe.__bindgen_anon_4.buf_index = buf_index;
-            unsafe {
-                sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED;
-            }
-        }
-        if let Some(addr) = addr {
-            sqe.__bindgen_anon_2.addr = addr;
-        }
-        Entry128(Entry(sqe), cmd2)
+        Self { sqe, cmd2 }
     }
+
+    /// The `buf_index` is an index into an array of fixed buffers,
+    /// and is only valid if fixed buffers were registered.
+    #[inline]
+    pub fn buf_index(self, buf_index: Option<u16>) -> Self {
+        if let Some(buf_index) = buf_index {
+            self.sqe.__bindgen_anon_4.buf_index = buf_index;
+            unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED };
+        }
+        self
+    }
+
+    /// Arbitrary command data.
+    #[inline]
+    pub fn cmd(self, cmd: [u8; 80]) -> Self {
+        let cmd1: [u8; 16] = cmd[..16].try_into().unwrap();
+        unsafe {
+            *self
+                .sqe
+                .__bindgen_anon_6
+                .cmd
+                .as_mut()
+                .as_mut_ptr()
+                .cast::<[u8; 16]>() = cmd1
+        };
+        self.cmd2.copy_from_slice(&cmd[16..]);
+        self
+    }
+
+    /// The `addr` is typically a pointer to buffer or iovecs,
+    /// but some file/device command also need to pass an addr.
+    /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
+    /// needs to set `addr` to some special value.
+    #[inline]
+    pub fn addr(self, addr: Option<u64>) -> Self {
+        if let Some(addr) = addr {
+            self.sqe.__bindgen_anon_2.addr = addr;
+        }
+        self
+    }
+
+    opcode_common!();
 }
 
 opcode! {
@@ -1866,30 +1382,20 @@ opcode! {
     /// it.
     ///
     /// Available since 5.19.
-    pub struct Socket {
-        domain: { i32 },
-        socket_type: { i32 },
-        protocol: { i32 },
-        ;;
-        file_index: Option<types::DestinationSlot> = None,
-        flags: i32 = 0,
-    }
+    pub struct Socket = sys::IORING_OP_SOCKET;
 
-    pub const CODE = sys::IORING_OP_SOCKET;
-
-    pub fn build(self) -> Entry {
-        let Socket { domain, socket_type, protocol, file_index, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, domain: i32, socket_type: i32, protocol: i32) {
         sqe.fd = domain as _;
         sqe.__bindgen_anon_1.off = socket_type as _;
         sqe.len = protocol as _;
+    }
+
+    fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
+        sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = flags as _;
-        if let Some(dest) = file_index {
-            sqe.__bindgen_anon_5.file_index = dest.kernel_index_arg();
-        }
-        Entry(sqe)
     }
 }
 
@@ -1899,29 +1405,25 @@ opcode! {
     /// Set the `allocate_file_index` property if fixed file table entries should be used.
     ///
     /// Available since 5.19.
-    pub struct AcceptMulti {
-        fd: { impl sealed::UseFixed },
-        ;;
-        allocate_file_index: bool = false,
-        flags: i32 = 0
-    }
+    pub struct AcceptMulti = sys::IORING_OP_ACCEPT;
 
-    pub const CODE = sys::IORING_OP_ACCEPT;
-
-    pub fn build(self) -> Entry {
-        let AcceptMulti { fd, allocate_file_index, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = sys::IORING_ACCEPT_MULTISHOT as u16;
+    fn new(sqe, fd: impl sealed::UseFixed) {
+        assign_fd!(sqe, fd);
         // No out SockAddr is passed for the multishot accept case.
         // The user should perform a syscall to get any resulting connection's remote address.
+        sqe.ioprio = sys::IORING_ACCEPT_MULTISHOT as u16;
+    }
+
+    fn allocate_file_index(sqe, allocate_file_index: bool) {
+        sqe.__bindgen_anon_5.file_index = if allocate_file_index {
+            sys::IORING_FILE_INDEX_ALLOC as u32
+        } else {
+            0
+        };
+    }
+
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
-        if allocate_file_index {
-            sqe.__bindgen_anon_5.file_index = sys::IORING_FILE_INDEX_ALLOC as u32;
-        }
-        Entry(sqe)
     }
 }
 
@@ -1929,33 +1431,26 @@ opcode! {
 
 opcode! {
     /// Send a message (with fixed FD) to a target ring.
-    pub struct MsgRingSendFd {
-        ring_fd: { impl sealed::UseFd },
-        fixed_slot_src: { types::Fixed },
-        dest_slot_index: { types::DestinationSlot },
-        user_data: { u64 },
-        ;;
-        opcode_flags: u32 = 0
-    }
+    pub struct MsgRingSendFd = sys::IORING_OP_MSG_RING;
 
-    pub const CODE = sys::IORING_OP_MSG_RING;
-
-    pub fn build(self) -> Entry {
-        let MsgRingSendFd { ring_fd, fixed_slot_src, dest_slot_index, user_data, opcode_flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(
+        sqe,
+        ring_fd: impl sealed::UseFd,
+        fixed_slot_src: types::Fixed,
+        dest_slot_index: types::DestinationSlot,
+        user_data: u64,
+    ) {
         sqe.__bindgen_anon_2.addr = sys::IORING_MSG_SEND_FD.into();
-        sqe.fd = ring_fd;
+        sqe.fd = sealed::UseFd::into(ring_fd);
         sqe.__bindgen_anon_1.off = user_data;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = fixed_slot_src.0 as u64 };
         sqe.__bindgen_anon_5.file_index = dest_slot_index.kernel_index_arg();
+    }
+
+    fn opcode_flags(sqe, opcode_flags: u32) {
         sqe.__bindgen_anon_3.msg_ring_flags = opcode_flags;
-        Entry(sqe)
     }
 }
-
-// === 6.0 ===
 
 opcode! {
     /// Send a zerocopy message on a socket, equivalent to `send(2)`.
@@ -1971,93 +1466,77 @@ opcode! {
     /// Notifications posted by this operation can be checked with [notif](crate::cqueue::notif).
     ///
     /// [io_uring_enter]: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html
-    pub struct SendZc {
-        fd: { impl sealed::UseFixed },
-        buf: { *const u8 },
-        len: { u32 },
-        ;;
-        /// The `buf_index` is an index into an array of fixed buffers, and is only valid if fixed
-        /// buffers were registered.
-        ///
-        /// The buf and len arguments must fall within a region specified by buf_index in the
-        /// previously registered buffer. The buffer need not be aligned with the start of the
-        /// registered buffer.
-        buf_index: Option<u16> = None,
-        dest_addr: *const libc::sockaddr = core::ptr::null(),
-        dest_addr_len: libc::socklen_t = 0,
-        flags: i32 = 0,
-        zc_flags: u16 = 0,
-    }
+    pub struct SendZc = sys::IORING_OP_SEND_ZC;
 
-    pub const CODE = sys::IORING_OP_SEND_ZC;
-
-    pub fn build(self) -> Entry {
-        let SendZc { fd, buf, len, buf_index, dest_addr, dest_addr_len, flags, zc_flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, buf: *const u8, len: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = buf as _;
         sqe.len = len;
-        sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.ioprio = zc_flags;
+    }
+
+    /// The `buf_index` is an index into an array of fixed buffers, and is only valid if fixed
+    /// buffers were registered.
+    ///
+    /// The buf and len arguments must fall within a region specified by buf_index in the
+    /// previously registered buffer. The buffer need not be aligned with the start of the
+    /// registered buffer.
+    fn buf_index(sqe, buf_index: Option<u16>) {
         if let Some(buf_index) = buf_index {
             sqe.__bindgen_anon_4.buf_index = buf_index;
             sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
         }
-        sqe.__bindgen_anon_1.addr2 = dest_addr as _;
-        sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
-        Entry(sqe)
     }
 
-    pub fn build_into(self, entry: &mut Entry) {
-        let SendZc { fd, buf, len, buf_index, dest_addr, dest_addr_len, flags, zc_flags } = self;
-
-        let sqe = &mut entry.0;
-        assign_fd!(sqe.fd = fd);
-        sqe.opcode = Self::CODE;
-        sqe.__bindgen_anon_2.addr = buf as _;
-        sqe.len = len;
-        sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.ioprio = zc_flags;
-        if let Some(buf_index) = buf_index {
-            sqe.__bindgen_anon_4.buf_index = buf_index;
-            sqe.ioprio |= sys::IORING_RECVSEND_FIXED_BUF as u16;
-        }
+    /// Set the destination address, for sending from an unconnected socket.
+    ///
+    /// When set, `dest_addr_len` must be set as well.
+    fn dest_addr(sqe, dest_addr: *const libc::sockaddr) {
         sqe.__bindgen_anon_1.addr2 = dest_addr as _;
+    }
+
+    fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
+    }
+
+    fn flags(sqe, flags: i32) {
+        sqe.__bindgen_anon_3.msg_flags = flags as _;
+    }
+
+    /// Zerocopy flags, ORed with already set bits.
+    fn zc_flags(sqe, zc_flags: u16) {
+        sqe.ioprio |= zc_flags;
     }
 }
 
 // === 6.1 ===
 
 opcode! {
-    /// Send a zerocopy message on a socket, equivalent to `send(2)`.
+    /// Send a zerocopy message on a socket, equivalent to `sendmsg(2)`.
     ///
-    /// fd must be set to the socket file descriptor, addr must contains a pointer to the msghdr
+    /// fd must be set to the socket file descriptor, msg must contain a pointer to the msghdr
     /// structure, and flags holds the flags associated with the system call.
-    #[derive(Debug)]
-    pub struct SendMsgZc {
-        fd: { impl sealed::UseFixed },
-        msg: { *const libc::msghdr },
-        ;;
-        ioprio: u16 = 0,
-        flags: u32 = 0
-    }
+    /// The message header must stay valid until the operation completes.
+    ///
+    /// This operation might result in two completion queue entries.
+    /// See the `IORING_OP_SENDMSG_ZC` section at [io_uring_enter][] for the exact semantics.
+    /// Notifications posted by this operation can be checked with [notif](crate::cqueue::notif).
+    ///
+    /// [io_uring_enter]: https://man7.org/linux/man-pages/man2/io_uring_enter.2.html
+    pub struct SendMsgZc = sys::IORING_OP_SENDMSG_ZC;
 
-    pub const CODE = sys::IORING_OP_SENDMSG_ZC;
-
-    pub fn build(self) -> Entry {
-        let SendMsgZc { fd, msg, ioprio, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.ioprio = ioprio;
+    fn new(sqe, fd: impl sealed::UseFixed, msg: *const libc::msghdr) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = msg as _;
         sqe.len = 1;
+    }
+
+    /// I/O priority (zerocopy flags), ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
-        Entry(sqe)
     }
 }
 
@@ -2065,27 +1544,17 @@ opcode! {
 
 opcode! {
     /// Issue the equivalent of `pread(2)` with multi-shot semantics.
-    pub struct ReadMulti {
-        fd: { impl sealed::UseFixed },
-        len: { u32 },
-        buf_group: { u16 },
-        ;;
-        offset: u64 = 0,
-    }
+    pub struct ReadMulti = sys::IORING_OP_READ_MULTISHOT;
 
-    pub const CODE = sys::IORING_OP_READ_MULTISHOT;
-
-    pub fn build(self) -> Entry {
-        let Self { fd, len, buf_group, offset } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_1.off = offset;
+    fn new(sqe, fd: impl sealed::UseFixed, len: u32, buf_group: u16) {
+        assign_fd!(sqe, fd);
         sqe.len = len;
         sqe.__bindgen_anon_4.buf_group = buf_group;
-        sqe.flags = crate::squeue::Flags::BUFFER_SELECT.bits();
-        Entry(sqe)
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+    }
+
+    fn offset(sqe, offset: u64) {
+        sqe.__bindgen_anon_1.off = offset;
     }
 }
 
@@ -2098,29 +1567,17 @@ opcode! {
     /// `FUTEX_BITSET_MATCH_ANY` (truncated to futex bits). `futex_flags` follows the `futex2(2)`
     /// flags, not the `futex(2)` v1 interface flags. `flags` are currently unused and hence `0`
     /// must be passed.
-    #[derive(Debug)]
-    pub struct FutexWait {
-        futex: { *const u32 },
-        val: { u64 },
-        mask: { u64 },
-        futex_flags: { u32 },
-        ;;
-        flags: u32 = 0
-    }
+    pub struct FutexWait = sys::IORING_OP_FUTEX_WAIT;
 
-    pub const CODE = sys::IORING_OP_FUTEX_WAIT;
-
-    pub fn build(self) -> Entry {
-        let FutexWait { futex, val, mask, futex_flags, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, futex: *const u32, val: u64, mask: u64, futex_flags: u32) {
         sqe.fd = futex_flags as _;
         sqe.__bindgen_anon_2.addr = futex as usize as _;
         sqe.__bindgen_anon_1.off = val;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
-        Entry(sqe)
     }
 }
 
@@ -2132,29 +1589,17 @@ opcode! {
     /// then that must be set in `mask`. Use `FUTEX_BITSET_MATCH_ANY` (truncated to futex bits) to
     /// match any waiter on the given futex. `flags` are currently unused and hence `0` must be
     /// passed.
-    #[derive(Debug)]
-    pub struct FutexWake {
-        futex: { *const u32 },
-        val: { u64 },
-        mask: { u64 },
-        futex_flags: { u32 },
-        ;;
-        flags: u32 = 0
-    }
+    pub struct FutexWake = sys::IORING_OP_FUTEX_WAKE;
 
-    pub const CODE = sys::IORING_OP_FUTEX_WAKE;
-
-    pub fn build(self) -> Entry {
-        let FutexWake { futex, val, mask, futex_flags, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, futex: *const u32, val: u64, mask: u64, futex_flags: u32) {
         sqe.fd = futex_flags as _;
         sqe.__bindgen_anon_2.addr = futex as usize as _;
         sqe.__bindgen_anon_1.off = val;
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
-        Entry(sqe)
     }
 }
 
@@ -2164,25 +1609,15 @@ opcode! {
     /// Wait on multiple futexes at the same time. Futexes are given by `futexv` and `nr_futex` is
     /// the number of futexes in that array. Unlike `FutexWait`, the desired bitset mask and values
     /// are passed in `futexv`. `flags` are currently unused and hence `0` must be passed.
-    #[derive(Debug)]
-    pub struct FutexWaitV {
-        futexv: { *const types::FutexWaitV },
-        nr_futex: { u32 },
-        ;;
-        flags: u32 = 0
-    }
+    pub struct FutexWaitV = sys::IORING_OP_FUTEX_WAITV;
 
-    pub const CODE = sys::IORING_OP_FUTEX_WAITV;
-
-    pub fn build(self) -> Entry {
-        let FutexWaitV { futexv, nr_futex, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, futexv: *const types::FutexWaitV, nr_futex: u32) {
         sqe.__bindgen_anon_2.addr = futexv as usize as _;
         sqe.len = nr_futex;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
-        Entry(sqe)
     }
 }
 
@@ -2190,27 +1625,20 @@ opcode! {
     /// Issue the equivalent of a `waitid(2)` system call.
     ///
     /// Available since kernel 6.7.
-    #[derive(Debug)]
-    pub struct WaitId {
-        idtype: { libc::idtype_t },
-        id: { libc::id_t },
-        options: { libc::c_int },
-        ;;
-        infop: *const libc::siginfo_t = std::ptr::null(),
-        flags: libc::c_uint = 0,
+    pub struct WaitId = sys::IORING_OP_WAITID;
+
+    fn new(sqe, idtype: libc::idtype_t, id: libc::id_t, options: libc::c_int) {
+        sqe.fd = id as _;
+        sqe.len = idtype as _;
+        sqe.__bindgen_anon_5.file_index = options as _;
     }
 
-    pub const CODE = sys::IORING_OP_WAITID;
+    fn infop(sqe, infop: *const libc::siginfo_t) {
+        sqe.__bindgen_anon_1.addr2 = infop as _;
+    }
 
-    pub fn build(self) -> Entry {
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        sqe.fd = self.id as _;
-        sqe.len = self.idtype as _;
-        sqe.__bindgen_anon_3.waitid_flags = self.flags;
-        sqe.__bindgen_anon_5.file_index = self.options as _;
-        sqe.__bindgen_anon_1.addr2 = self.infop as _;
-        Entry(sqe)
+    fn flags(sqe, flags: libc::c_uint) {
+        sqe.__bindgen_anon_3.waitid_flags = flags;
     }
 }
 
@@ -2221,24 +1649,12 @@ opcode! {
     ///
     /// Turns a direct descriptor into a regular file descriptor that can be later used by regular
     /// system calls that take a normal raw file descriptor
-    #[derive(Debug)]
-    pub struct FixedFdInstall {
-        fd: { types::Fixed },
-        file_flags: { u32 },
-        ;;
-    }
+    pub struct FixedFdInstall = sys::IORING_OP_FIXED_FD_INSTALL;
 
-    pub const CODE = sys::IORING_OP_FIXED_FD_INSTALL;
-
-    pub fn build(self) -> Entry {
-        let FixedFdInstall { fd, file_flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, fd: types::Fixed, file_flags: u32) {
         sqe.fd = fd.0 as _;
-        sqe.flags = crate::squeue::Flags::FIXED_FILE.bits();
+        sqe.flags |= Flags::FIXED_FILE.bits();
         sqe.__bindgen_anon_3.install_fd_flags = file_flags;
-        Entry(sqe)
     }
 }
 
@@ -2246,23 +1662,11 @@ opcode! {
 
 opcode! {
     /// Perform file truncation, equivalent to `ftruncate(2)`.
-    #[derive(Debug)]
-    pub struct Ftruncate {
-        fd: { impl sealed::UseFixed },
-        len: { u64 },
-        ;;
-    }
+    pub struct Ftruncate = sys::IORING_OP_FTRUNCATE;
 
-    pub const CODE = sys::IORING_OP_FTRUNCATE;
-
-    pub fn build(self) -> Entry {
-        let Ftruncate { fd, len } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, len: u64) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_1.off = len;
-        Entry(sqe)
     }
 }
 
@@ -2270,28 +1674,21 @@ opcode! {
 
 opcode! {
     /// Send a bundle of messages on a socket in a single request.
-    pub struct SendBundle {
-        fd: { impl sealed::UseFixed },
-        buf_group: { u16 },
-        ;;
-        flags: i32 = 0,
-        len: u32 = 0
+    pub struct SendBundle = sys::IORING_OP_SEND;
+
+    fn new(sqe, fd: impl sealed::UseFixed, buf_group: u16) {
+        assign_fd!(sqe, fd);
+        sqe.ioprio = sys::IORING_RECVSEND_BUNDLE as u16;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+        sqe.__bindgen_anon_4.buf_group = buf_group;
     }
 
-    pub const CODE = sys::IORING_OP_SEND;
-
-    pub fn build(self) -> Entry {
-        let SendBundle { fd, len, flags, buf_group } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len;
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.ioprio |= sys::IORING_RECVSEND_BUNDLE as u16;
-        sqe.flags |= crate::squeue::Flags::BUFFER_SELECT.bits();
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-        Entry(sqe)
+    }
+
+    fn len(sqe, len: u32) {
+        sqe.len = len;
     }
 }
 
@@ -2305,26 +1702,17 @@ opcode! {
     /// obtains the bundle of remaining buffers. This behavior may change in the future.
     ///
     /// Bundle variant is available since kernel 6.10
-    pub struct RecvBundle {
-        fd: { impl sealed::UseFixed },
-        buf_group: { u16 },
-        ;;
-        flags: i32 = 0
+    pub struct RecvBundle = sys::IORING_OP_RECV;
+
+    fn new(sqe, fd: impl sealed::UseFixed, buf_group: u16) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+        sqe.ioprio = sys::IORING_RECVSEND_BUNDLE as u16;
     }
 
-    pub const CODE = sys::IORING_OP_RECV;
-
-    pub fn build(self) -> Entry {
-        let RecvBundle { fd, buf_group, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-        sqe.flags |= crate::squeue::Flags::BUFFER_SELECT.bits();
-        sqe.ioprio |= sys::IORING_RECVSEND_BUNDLE as u16;
-        Entry(sqe)
     }
 }
 
@@ -2346,27 +1734,17 @@ opcode! {
     /// obtains the bundle of remaining buffers. This behavior may change in the future.
     ///
     /// Multishot bundle variant is available since kernel 6.10.
-    pub struct RecvMultiBundle {
-        fd: { impl sealed::UseFixed },
-        buf_group: { u16 },
-        ;;
-        flags: i32 = 0
+    pub struct RecvMultiBundle = sys::IORING_OP_RECV;
+
+    fn new(sqe, fd: impl sealed::UseFixed, buf_group: u16) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
+        sqe.ioprio = (sys::IORING_RECV_MULTISHOT | sys::IORING_RECVSEND_BUNDLE) as u16;
     }
 
-    pub const CODE = sys::IORING_OP_RECV;
-
-    pub fn build(self) -> Entry {
-        let RecvMultiBundle { fd, buf_group, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-        sqe.flags |= crate::squeue::Flags::BUFFER_SELECT.bits();
-        sqe.ioprio = sys::IORING_RECV_MULTISHOT as _;
-        sqe.ioprio |= sys::IORING_RECVSEND_BUNDLE as u16;
-        Entry(sqe)
     }
 }
 
@@ -2374,45 +1752,22 @@ opcode! {
 
 opcode! {
     /// Bind a socket, equivalent to `bind(2)`.
-    pub struct Bind {
-        fd: { impl sealed::UseFixed },
-        addr: { *const libc::sockaddr },
-        addrlen: { libc::socklen_t }
-        ;;
-    }
+    pub struct Bind = sys::IORING_OP_BIND;
 
-    pub const CODE = sys::IORING_OP_BIND;
-
-    pub fn build(self) -> Entry {
-        let Bind { fd, addr, addrlen } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, addr: *const libc::sockaddr, addrlen: libc::socklen_t) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = addr as _;
         sqe.__bindgen_anon_1.off = addrlen as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Listen on a socket, equivalent to `listen(2)`.
-    pub struct Listen {
-        fd: { impl sealed::UseFixed },
-        backlog: { i32 },
-        ;;
-    }
+    pub struct Listen = sys::IORING_OP_LISTEN;
 
-    pub const CODE = sys::IORING_OP_LISTEN;
-
-    pub fn build(self) -> Entry {
-        let Listen { fd, backlog } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, backlog: i32) {
+        assign_fd!(sqe, fd);
         sqe.len = backlog as _;
-        Entry(sqe)
     }
 }
 
@@ -2420,144 +1775,279 @@ opcode! {
 
 opcode! {
     /// Issue the zerocopy equivalent of a `recv(2)` system call.
-    pub struct RecvZc {
-        fd: { impl sealed::UseFixed },
-        len: { u32 },
-        ;;
-        ifq: u32 = 0,
-        ioprio: u16 = 0,
+    pub struct RecvZc = sys::IORING_OP_RECV_ZC;
+
+    fn new(sqe, fd: impl sealed::UseFixed, len: u32) {
+        assign_fd!(sqe, fd);
+        sqe.len = len;
+        sqe.ioprio = sys::IORING_RECV_MULTISHOT as u16;
     }
 
-    pub const CODE = sys::IORING_OP_RECV_ZC;
-
-    pub fn build(self) -> Entry {
-        let Self { fd, len, ifq, ioprio } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.len = len;
-        sqe.ioprio = ioprio | sys::IORING_RECV_MULTISHOT as u16;
+    fn ifq(sqe, ifq: u32) {
         sqe.__bindgen_anon_5.zcrx_ifq_idx = ifq;
-        Entry(sqe)
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
     }
 }
 
 opcode! {
     /// Issue the equivalent of a `epoll_wait(2)` system call.
-    pub struct EpollWait {
-        fd: { impl sealed::UseFixed },
-        events: { *mut types::epoll_event },
-        max_events: { u32 },
-        ;;
-        flags: u32 = 0,
-    }
+    pub struct EpollWait = sys::IORING_OP_EPOLL_WAIT;
 
-    pub const CODE = sys::IORING_OP_EPOLL_WAIT;
-
-    pub fn build(self) -> Entry {
-        let Self { fd, events, max_events, flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
+    fn new(sqe, fd: impl sealed::UseFixed, events: *mut types::epoll_event, max_events: u32) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = events as u64;
         sqe.len = max_events;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.poll32_events = flags;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Vectored read into a fixed buffer, equivalent to `preadv2(2)`.
-    pub struct ReadvFixed {
-        fd: { impl sealed::UseFixed },
-        iovec: { *const ::libc::iovec },
-        len: { u32 },
-        buf_index: { u16 },
-        ;;
-        ioprio: u16 = 0,
-        offset: u64 = 0,
-        rw_flags: i32 = 0,
-    }
+    pub struct ReadvFixed = sys::IORING_OP_READV_FIXED;
 
-    pub const CODE = sys::IORING_OP_READV_FIXED;
-
-    pub fn build(self) -> Entry {
-        let Self { fd, iovec, len, buf_index, offset, ioprio, rw_flags } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_1.off = offset as _;
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        iovec: *const libc::iovec,
+        len: u32,
+        buf_index: u16,
+    ) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = iovec as _;
         sqe.len = len;
         sqe.__bindgen_anon_4.buf_index = buf_index;
-        sqe.ioprio = ioprio;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn offset(sqe, offset: u64) {
+        sqe.__bindgen_anon_1.off = offset;
+    }
+
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
-        Entry(sqe)
     }
 }
 
 opcode! {
     /// Vectored write from a fixed buffer, equivalent to `pwritev2(2)`.
-    pub struct WritevFixed {
-        fd: { impl sealed::UseFixed },
-        iovec: { *const ::libc::iovec },
-        len: { u32 },
-        buf_index: { u16 },
-        ;;
-        ioprio: u16 = 0,
-        offset: u64 = 0,
-        rw_flags: i32 = 0,
-        /// Write stream id (Linux 6.16+); `0` means no stream.
-        /// Older kernels ignore this field.
-        write_stream: u8 = 0,
-    }
+    pub struct WritevFixed = sys::IORING_OP_WRITEV_FIXED;
 
-    pub const CODE = sys::IORING_OP_WRITEV_FIXED;
-
-    pub fn build(self) -> Entry {
-        let Self { fd, iovec, len, buf_index, offset, ioprio, rw_flags, write_stream } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe.fd = fd);
-        sqe.__bindgen_anon_1.off = offset as _;
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        iovec: *const libc::iovec,
+        len: u32,
+        buf_index: u16,
+    ) {
+        assign_fd!(sqe, fd);
         sqe.__bindgen_anon_2.addr = iovec as _;
         sqe.len = len;
         sqe.__bindgen_anon_4.buf_index = buf_index;
-        sqe.ioprio = ioprio;
+    }
+
+    /// I/O priority, ORed with already set bits.
+    fn ioprio(sqe, ioprio: u16) {
+        sqe.ioprio |= ioprio;
+    }
+
+    fn offset(sqe, offset: u64) {
+        sqe.__bindgen_anon_1.off = offset;
+    }
+
+    fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
+    }
+
+    /// Write stream id (Linux 6.16+); `0` means no stream.
+    /// Older kernels ignore this field.
+    fn write_stream(sqe, write_stream: u8) {
         sqe.__bindgen_anon_5.__bindgen_anon_2.write_stream = write_stream;
-        Entry(sqe)
     }
 }
 
 // === 6.16 ===
 
 opcode! {
-    // Create a pipe, equivalent to `pipe(2)`.
-    pub struct Pipe {
-        fds: { *mut RawFd },
-        ;;
-        flags: u32 = 0,
-        file_index: Option<types::DestinationSlot> = None,
-    }
+    /// Create a pipe, equivalent to `pipe(2)`.
+    pub struct Pipe = sys::IORING_OP_PIPE;
 
-    pub const CODE = sys::IORING_OP_PIPE;
-
-    pub fn build(self) -> Entry {
-        let Self { fds, flags, file_index } = self;
-
-        let mut sqe = sqe_zeroed();
-        sqe.opcode = Self::CODE;
+    fn new(sqe, fds: *mut RawFd) {
         sqe.fd = 0;
         sqe.__bindgen_anon_2.addr = fds as _;
+    }
+
+    fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.pipe_flags = flags;
-        if let Some(dest) = file_index {
-            sqe.__bindgen_anon_5.file_index = dest.kernel_index_arg();
-        }
-        Entry(sqe)
+    }
+
+    fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
+        sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Fd, Fixed};
+
+    #[test]
+    fn fixed_fd_sets_sqe_flag() {
+        let mut entry = Entry::default();
+        Recv::new(&mut entry, Fixed(3), std::ptr::null_mut(), 0);
+        assert_eq!(entry.0.opcode, Recv::CODE);
+        assert_eq!(entry.0.fd, 3);
+        assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
+
+        let mut entry = Entry::default();
+        Recv::new(&mut entry, Fd(5), std::ptr::null_mut(), 0);
+        assert_eq!(entry.0.fd, 5);
+        assert_eq!(entry.0.flags, 0);
+    }
+
+    #[test]
+    fn common_setters() {
+        let mut entry = Entry::default();
+        Nop::new(&mut entry)
+            .user_data(42)
+            .sqe_flags(Flags::IO_LINK)
+            .sqe_flags(Flags::ASYNC)
+            .personality(3);
+        assert_eq!(entry.0.opcode, Nop::CODE);
+        assert_eq!(entry.0.fd, -1);
+        assert_eq!(entry.get_user_data(), 42);
+        assert_eq!(entry.0.flags, (Flags::IO_LINK | Flags::ASYNC).bits());
+        assert_eq!(entry.0.personality, 3);
+    }
+
+    #[test]
+    fn recv_buffer_select() {
+        let mut entry = Entry::default();
+        Recv::new(&mut entry, Fixed(3), std::ptr::null_mut(), 4096)
+            .buffer_select(7)
+            .ioprio(sys::IORING_RECVSEND_POLL_FIRST as u16);
+        assert_eq!(entry.0.len, 4096);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_group }, 7);
+        assert_eq!(
+            entry.0.flags,
+            (Flags::FIXED_FILE | Flags::BUFFER_SELECT).bits()
+        );
+        assert_eq!(entry.0.ioprio, sys::IORING_RECVSEND_POLL_FIRST as u16);
+    }
+
+    #[test]
+    fn sendmsg_sets_msg() {
+        let hdr = std::mem::MaybeUninit::<libc::msghdr>::zeroed();
+        let msg = hdr.as_ptr();
+
+        let mut entry = Entry::default();
+        SendMsg::new(&mut entry, Fd(4), msg);
+        assert_eq!(entry.0.opcode, SendMsg::CODE);
+        assert_eq!(entry.0.fd, 4);
+        assert_eq!(entry.0.len, 1);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, msg as u64);
+
+        let mut entry = Entry::default();
+        SendMsgZc::new(&mut entry, Fd(4), msg).ioprio(sys::IORING_SEND_ZC_REPORT_USAGE as u16);
+        assert_eq!(entry.0.opcode, SendMsgZc::CODE);
+        assert_eq!(entry.0.len, 1);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, msg as u64);
+        assert_eq!(entry.0.ioprio, sys::IORING_SEND_ZC_REPORT_USAGE as u16);
+    }
+
+    #[test]
+    fn send_zc_ioprio_bits_combine() {
+        let mut entry = Entry::default();
+        SendZc::new(&mut entry, Fd(1), std::ptr::null(), 0)
+            .buf_index(Some(2))
+            .zc_flags(sys::IORING_RECVSEND_POLL_FIRST as u16);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_index }, 2);
+        assert_eq!(
+            entry.0.ioprio,
+            (sys::IORING_RECVSEND_FIXED_BUF | sys::IORING_RECVSEND_POLL_FIRST) as u16
+        );
+    }
+
+    #[test]
+    fn splice_fixed_fd_in_keeps_flag() {
+        let mut entry = Entry::default();
+        Splice::new(&mut entry, Fixed(1), -1, Fd(2), -1, 10).flags(libc::SPLICE_F_MOVE);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_5.splice_fd_in }, 1);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.splice_flags },
+            sys::SPLICE_F_FD_IN_FIXED | libc::SPLICE_F_MOVE
+        );
+    }
+
+    #[test]
+    fn read_multi_fixed_fd_keeps_flag() {
+        let mut entry = Entry::default();
+        ReadMulti::new(&mut entry, Fixed(1), 0, 3);
+        assert_eq!(
+            entry.0.flags,
+            (Flags::FIXED_FILE | Flags::BUFFER_SELECT).bits()
+        );
+    }
+
+    #[test]
+    fn timeout_update_keeps_update_flag() {
+        let ts = types::Timespec::new();
+        let mut entry = Entry::default();
+        TimeoutUpdate::new(&mut entry, 1, &ts).flags(types::TimeoutFlags::ABS);
+        assert_eq!(
+            unsafe { entry.0.__bindgen_anon_3.timeout_flags },
+            types::TimeoutFlags::ABS.bits() | sys::IORING_TIMEOUT_UPDATE
+        );
+    }
+
+    #[test]
+    fn close_fixed() {
+        let mut entry = Entry::default();
+        Close::new(&mut entry, Fixed(4));
+        assert_eq!(entry.0.fd, 0);
+        assert_eq!(entry.0.flags, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_5.file_index }, 5);
+    }
+
+    #[test]
+    fn uring_cmd80_splits_cmd() {
+        let mut cmd = [0u8; 80];
+        cmd.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8);
+
+        let mut entry = Entry128::from(Entry::default());
+        UringCmd80::new(&mut entry, Fd(1), 9).cmd(cmd).user_data(5);
+        assert_eq!(entry.0.0.opcode, UringCmd80::CODE);
+        assert_eq!(entry.get_user_data(), 5);
+        let cmd1 = unsafe {
+            *entry
+                .0
+                .0
+                .__bindgen_anon_6
+                .cmd
+                .as_ref()
+                .as_ptr()
+                .cast::<[u8; 16]>()
+        };
+        assert_eq!(cmd1[..], cmd[..16]);
+        assert_eq!(entry.1[..], cmd[16..]);
+    }
+
+    #[test]
+    fn entry128_accepts_ops() {
+        let mut entry = Entry128::from(Entry::default());
+        Nop::new(&mut entry).user_data(9);
+        assert_eq!(entry.get_opcode(), Nop::CODE as u32);
+        assert_eq!(entry.get_user_data(), 9);
     }
 }

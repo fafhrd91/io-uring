@@ -47,20 +47,23 @@ pub fn test_futex_wait<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let mut futex = INIT_VAL;
 
-    let futex_wait_e = opcode::FutexWait::new(
-        &futex,
-        INIT_VAL as u64,
-        // NB. FUTEX_BITSET_MATCH_ANY is signed. We are operating on 32-bit futex, thus this mask
-        // must be 32-bit. Converting directly from c_int to u64 will yield `u64::MAX`, which is
-        // invalid.
-        libc::FUTEX_BITSET_MATCH_ANY as u32 as u64,
-        FUTEX2_SIZE_U32,
-    );
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&futex_wait_e.build().user_data(USER_DATA).into())
+            .push(|entry| {
+                opcode::FutexWait::new(
+                    entry,
+                    &futex,
+                    INIT_VAL as u64,
+                    // NB. FUTEX_BITSET_MATCH_ANY is signed. We are operating on 32-bit futex, thus
+                    // this mask must be 32-bit. Converting directly from c_int to u64 will yield
+                    // `u64::MAX`, which is invalid.
+                    libc::FUTEX_BITSET_MATCH_ANY as u32 as u64,
+                    FUTEX2_SIZE_U32,
+                )
+                .user_data(USER_DATA);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -112,17 +115,22 @@ pub fn test_futex_wake<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     futex.store(INIT_VAL + 1, Ordering::Relaxed);
 
-    let futex_wake_e = opcode::FutexWake::new(
-        futex.as_ptr(),
-        1,
-        // NB. See comments above for why it cannot be a single `as u64`.
-        libc::FUTEX_BITSET_MATCH_ANY as u32 as u64,
-        FUTEX2_SIZE_U32,
-    );
+    let futex_ptr = futex.as_ptr();
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&futex_wake_e.build().user_data(USER_DATA).into())
+            .push(|entry| {
+                opcode::FutexWake::new(
+                    entry,
+                    futex_ptr,
+                    1,
+                    // NB. See comments above for why it cannot be a single `as u64`.
+                    libc::FUTEX_BITSET_MATCH_ANY as u32 as u64,
+                    FUTEX2_SIZE_U32,
+                )
+                .user_data(USER_DATA);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -161,11 +169,14 @@ pub fn test_futex_waitv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .flags(FUTEX2_SIZE_U32);
     }
 
-    let futex_waitv_e = opcode::FutexWaitV::new(waitv.as_ptr().cast(), waitv.len() as _);
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&futex_waitv_e.build().user_data(USER_DATA).into())
+            .push(|entry| {
+                opcode::FutexWaitV::new(entry, waitv.as_ptr().cast(), waitv.len() as _)
+                    .user_data(USER_DATA);
+            })
+            .ok()
             .expect("queue is full");
     }
 

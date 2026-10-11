@@ -28,15 +28,17 @@ fn bench_iovec(c: &mut Criterion) {
         b.iter(|| {
             let bufs = black_box(&bufs);
 
-            let entry = opcode::Writev::new(
-                types::Fd(fd.as_raw_fd()),
-                bufs.as_ptr() as *const _,
-                bufs.len() as _,
-            );
-
             unsafe {
                 ring.submission()
-                    .push(&entry.build())
+                    .push(|entry| {
+                        opcode::Writev::new(
+                            entry,
+                            types::Fd(fd.as_raw_fd()),
+                            bufs.as_ptr() as *const _,
+                            bufs.len() as _,
+                        );
+                    })
+                    .ok()
                     .expect("queue is full");
             }
 
@@ -60,21 +62,26 @@ fn bench_iovec(c: &mut Criterion) {
         b.iter(|| {
             let bufs = black_box(&bufs);
 
-            let entry = opcode::Writev::new(
-                types::Fd(fd.as_raw_fd()),
-                bufs.as_ptr() as *const _,
-                bufs.len() as _,
-            );
-
             unsafe {
-                let mut queue = ring.submission();
+                let queue = ring.submission();
                 queue
-                    .push(&entry.build().flags(squeue::Flags::IO_LINK))
+                    .push(|entry| {
+                        opcode::Writev::new(
+                            entry,
+                            types::Fd(fd.as_raw_fd()),
+                            bufs.as_ptr() as *const _,
+                            bufs.len() as _,
+                        )
+                        .sqe_flags(squeue::Flags::IO_LINK);
+                    })
+                    .ok()
                     .expect("queue is full");
                 for _ in 0..4 {
-                    let entry = opcode::Nop::new().build();
                     queue
-                        .push(&entry.flags(squeue::Flags::IO_LINK))
+                        .push(|entry| {
+                            opcode::Nop::new(entry).sqe_flags(squeue::Flags::IO_LINK);
+                        })
+                        .ok()
                         .expect("queue is full");
                 }
             }
@@ -90,14 +97,20 @@ fn bench_iovec(c: &mut Criterion) {
         let bufs = [&buf[..], &buf2[..], &buf3[..], &buf4[..], &buf5[..]];
 
         b.iter(|| {
-            let mut queue = ring.submission();
+            let queue = ring.submission();
             for buf in black_box(&bufs) {
-                let entry =
-                    opcode::Write::new(types::Fd(fd.as_raw_fd()), buf.as_ptr(), buf.len() as _);
-
                 unsafe {
                     queue
-                        .push(&entry.build().flags(squeue::Flags::IO_LINK))
+                        .push(|entry| {
+                            opcode::Write::new(
+                                entry,
+                                types::Fd(fd.as_raw_fd()),
+                                buf.as_ptr(),
+                                buf.len() as _,
+                            )
+                            .sqe_flags(squeue::Flags::IO_LINK);
+                        })
+                        .ok()
                         .expect("queue is full");
                 }
             }
@@ -116,12 +129,17 @@ fn bench_iovec(c: &mut Criterion) {
 
         b.iter(|| {
             for buf in black_box(&bufs) {
-                let entry =
-                    opcode::Write::new(types::Fd(fd.as_raw_fd()), buf.as_ptr(), buf.len() as _);
-
                 unsafe {
                     ring.submission()
-                        .push(&entry.build())
+                        .push(|entry| {
+                            opcode::Write::new(
+                                entry,
+                                types::Fd(fd.as_raw_fd()),
+                                buf.as_ptr(),
+                                buf.len() as _,
+                            );
+                        })
+                        .ok()
                         .expect("queue is full");
                 }
 

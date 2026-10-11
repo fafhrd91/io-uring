@@ -13,7 +13,7 @@ To use `io-uring` crate, first add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ntex-io-uring = "0.7"
+ntex-io-uring = "1"
 ```
 
 Next we can start using `io-uring` crate.
@@ -30,15 +30,20 @@ fn main() -> io::Result<()> {
     let fd = fs::File::open("README.md")?;
     let mut buf = vec![0; 1024];
 
-    let read_e = opcode::Read::new(types::Fd(fd.as_raw_fd()), buf.as_mut_ptr(), buf.len() as _)
-        .build()
-        .user_data(0x42);
-
     // Note that the developer needs to ensure
     // that the entry pushed into submission queue is valid (e.g. fd, buffer).
     unsafe {
         ring.submission()
-            .push(&read_e)
+            .push(|entry| {
+                opcode::Read::new(
+                    entry,
+                    types::Fd(fd.as_raw_fd()),
+                    buf.as_mut_ptr(),
+                    buf.len() as _,
+                )
+                .user_data(0x42);
+            })
+            .ok()
             .expect("submission queue is full");
     }
 
@@ -76,10 +81,3 @@ This project is licensed under either of
    http://opensource.org/licenses/MIT)
 
 at your option.
-
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in io-uring by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.

@@ -27,12 +27,14 @@ pub fn test_eventfd_poll<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         File::from_raw_fd(fd)
     };
 
-    let poll_e = opcode::PollAdd::new(types::Fd(fd.as_raw_fd()), libc::POLLIN as _);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x04).into())
+            .push(|entry| {
+                opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
+                    .user_data(0x04);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -76,12 +78,14 @@ pub fn test_eventfd_poll_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // add poll
 
-    let poll_e = opcode::PollAdd::new(types::Fd(fd.as_raw_fd()), libc::POLLIN as _);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x05).into())
+            .push(|entry| {
+                opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
+                    .user_data(0x05);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -89,12 +93,13 @@ pub fn test_eventfd_poll_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // remove poll
 
-    let poll_e = opcode::PollRemove::new(0x05);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x06).into())
+            .push(|entry| {
+                opcode::PollRemove::new(entry, 0x05).user_data(0x06);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -141,12 +146,14 @@ pub fn test_eventfd_poll_remove_failed<S: squeue::EntryMarker, C: cqueue::EntryM
 
     // add poll
 
-    let poll_e = opcode::PollAdd::new(types::Fd(fd.as_raw_fd()), libc::POLLIN as _);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x07).into())
+            .push(|entry| {
+                opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
+                    .user_data(0x07);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -156,12 +163,13 @@ pub fn test_eventfd_poll_remove_failed<S: squeue::EntryMarker, C: cqueue::EntryM
 
     // remove poll
 
-    let poll_e = opcode::PollRemove::new(0x08);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x08).into())
+            .push(|entry| {
+                opcode::PollRemove::new(entry, 0x08).user_data(0x08);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -201,12 +209,15 @@ pub fn test_eventfd_poll_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         File::from_raw_fd(fd)
     };
 
-    let poll_e = opcode::PollAdd::new(types::Fd(fd.as_raw_fd()), libc::POLLIN as _).multi(true);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&poll_e.build().user_data(0x04).into())
+            .push(|entry| {
+                opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
+                    .multi(true)
+                    .user_data(0x04);
+            })
+            .ok()
             .expect("queue is full");
     }
 

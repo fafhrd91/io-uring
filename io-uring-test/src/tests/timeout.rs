@@ -16,12 +16,14 @@ pub fn test_timeout<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // add timeout
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts);
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x09).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).user_data(0x09);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -39,16 +41,20 @@ pub fn test_timeout<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // add timeout but no
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts);
-    let nop_e = opcode::Nop::new();
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x0a).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).user_data(0x0a);
+            })
+            .ok()
             .expect("queue is full");
         queue
-            .push(&nop_e.build().user_data(0x0b).into())
+            .push(|entry| {
+                opcode::Nop::new(entry).user_data(0x0b);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -92,16 +98,20 @@ pub fn test_timeout_count<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     println!("test timeout_count");
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts).count(1);
-    let nop_e = opcode::Nop::new();
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x0c).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).count(1).user_data(0x0c);
+            })
+            .ok()
             .expect("queue is full");
         queue
-            .push(&nop_e.build().user_data(0x0d).into())
+            .push(|entry| {
+                opcode::Nop::new(entry).user_data(0x0d);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -137,12 +147,14 @@ pub fn test_timeout_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // add timeout
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts);
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x10).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).user_data(0x10);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -150,12 +162,13 @@ pub fn test_timeout_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // remove timeout
 
-    let timeout_e = opcode::TimeoutRemove::new(0x10);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x11).into())
+            .push(|entry| {
+                opcode::TimeoutRemove::new(entry, 0x10).user_data(0x11);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -191,12 +204,14 @@ pub fn test_timeout_update<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // add timeout
 
     let ts = types::Timespec::new().nsec(1_000_000); // 1ms
-    let timeout_e = opcode::Timeout::new(&ts);
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x10).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).user_data(0x10);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -206,12 +221,13 @@ pub fn test_timeout_update<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let ts = types::Timespec::new().nsec(2_000_000); // 2ms
 
-    let timeout_e = opcode::TimeoutUpdate::new(0x10, &ts);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x11).into())
+            .push(|entry| {
+                opcode::TimeoutUpdate::new(entry, 0x10, &ts).user_data(0x11);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -247,12 +263,14 @@ pub fn test_timeout_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     // add timeout
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts);
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x10).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts).user_data(0x10);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -260,12 +278,13 @@ pub fn test_timeout_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // remove timeout
 
-    let timeout_e = opcode::AsyncCancel::new(0x10);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x11).into())
+            .push(|entry| {
+                opcode::AsyncCancel::new(entry, 0x10).user_data(0x11);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -310,12 +329,15 @@ pub fn test_timeout_abs<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         .sec(now.tv_sec as u64 + 2)
         .nsec(now.tv_nsec as u32);
 
-    let timeout_e = opcode::Timeout::new(&ts).flags(types::TimeoutFlags::ABS);
-
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x19).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts)
+                    .flags(types::TimeoutFlags::ABS)
+                    .user_data(0x19);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -361,11 +383,12 @@ pub fn test_timeout_submit_args<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // no timeout
 
-    let nop_e = opcode::Nop::new();
-
     unsafe {
         ring.submission()
-            .push(&nop_e.build().user_data(0x1c).into())
+            .push(|entry| {
+                opcode::Nop::new(entry).user_data(0x1c);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -413,11 +436,12 @@ pub fn test_timeout_submit_args_min_wait<S: squeue::EntryMarker, C: cqueue::Entr
 
     // no timeout
 
-    let nop_e = opcode::Nop::new();
-
     unsafe {
         ring.submission()
-            .push(&nop_e.build().user_data(0x1d).into())
+            .push(|entry| {
+                opcode::Nop::new(entry).user_data(0x1d);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -446,14 +470,17 @@ pub fn test_timeout_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     println!("test timeout_multishot");
 
     let ts = types::Timespec::new().sec(1);
-    let timeout_e = opcode::Timeout::new(&ts)
-        .flags(types::TimeoutFlags::MULTISHOT)
-        .count(2);
 
     unsafe {
-        let mut queue = ring.submission();
+        let queue = ring.submission();
         queue
-            .push(&timeout_e.build().user_data(0x0c).into())
+            .push(|entry| {
+                opcode::Timeout::new(entry, &ts)
+                    .flags(types::TimeoutFlags::MULTISHOT)
+                    .count(2)
+                    .user_data(0x0c);
+            })
+            .ok()
             .expect("queue is full");
     }
 

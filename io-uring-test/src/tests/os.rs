@@ -19,12 +19,15 @@ pub fn test_waitid<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         .stderr(Stdio::null())
         .spawn()?;
 
-    let waitid_e = opcode::WaitId::new(libc::P_PID, child.id(), libc::WEXITED);
+    let child_id = child.id();
 
     unsafe {
-        let mut sq = ring.submission();
-        sq.push(&waitid_e.build().user_data(0x110).into())
-            .expect("queue is full");
+        let sq = ring.submission();
+        sq.push(|entry| {
+            opcode::WaitId::new(entry, libc::P_PID, child_id, libc::WEXITED).user_data(0x110);
+        })
+        .ok()
+        .expect("queue is full");
     }
 
     ring.submit()?;

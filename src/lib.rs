@@ -47,17 +47,14 @@
 mod util;
 pub mod cqueue;
 pub mod opcode;
-pub mod opcode2;
 pub mod register;
 pub mod squeue;
 mod submit;
 mod sys;
 pub mod types;
 
-use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::{cmp, io, mem};
+use std::{cmp, io, marker::PhantomData, mem, mem::ManuallyDrop};
 
 #[cfg(feature = "io_safety")]
 use std::os::unix::io::{AsFd, BorrowedFd};

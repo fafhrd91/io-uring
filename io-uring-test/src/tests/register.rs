@@ -138,13 +138,16 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     submitter.unregister_ring_fd()?;
 
-    let (mut submitter, mut sq, mut cq) = ring.split();
+    let (mut submitter, sq, mut cq) = ring.split();
     submitter.register_ring_fd()?;
 
     // Submitting now transparently goes through the registered ring index.
-    let nop = opcode::Nop::new().build().user_data(0x42).into();
     unsafe {
-        sq.push(&nop).expect("submission queue is full");
+        sq.push(|entry| {
+            opcode::Nop::new(entry).user_data(0x42);
+        })
+        .ok()
+        .expect("submission queue is full");
     }
     sq.sync();
     submitter.submit_and_wait(1)?;
@@ -172,9 +175,12 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     }
 
     // Submitting still works after unregistering, now via the raw file descriptor.
-    let nop = opcode::Nop::new().build().user_data(0x43).into();
     unsafe {
-        sq.push(&nop).expect("submission queue is full");
+        sq.push(|entry| {
+            opcode::Nop::new(entry).user_data(0x43);
+        })
+        .ok()
+        .expect("submission queue is full");
     }
     sq.sync();
     submitter.submit_and_wait(1)?;

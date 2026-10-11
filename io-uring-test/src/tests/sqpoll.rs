@@ -49,10 +49,15 @@ pub fn test_sqpoll_cq_overflow<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         .zip(bufs.iter_mut())
         .for_each(|(file, buf)| {
             let fd = file.as_raw_fd();
-            let entry = opcode::Read::new(types::Fd(fd), buf.as_mut_ptr(), buf.len() as _)
-                .build()
-                .into();
-            while unsafe { ring.submission().push(&entry).is_err() } {
+            let ptr = buf.as_mut_ptr();
+            let len = buf.len() as u32;
+            while unsafe {
+                ring.submission()
+                    .push(|entry| {
+                        opcode::Read::new(entry, types::Fd(fd), ptr, len);
+                    })
+                    .is_err()
+            } {
                 ring.submit().expect("Failed to submit");
             }
         });

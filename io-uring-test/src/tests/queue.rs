@@ -12,11 +12,14 @@ pub fn test_nop<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     println!("test nop");
 
-    let nop_e = opcode::Nop::new().build().user_data(0x42).into();
-
     unsafe {
-        let mut queue = ring.submission();
-        queue.push(&nop_e).expect("queue is full");
+        let queue = ring.submission();
+        queue
+            .push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x42);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -51,10 +54,13 @@ pub fn test_setup_no_sqarray<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         },
     };
 
-    let nop_e = opcode::Nop::new().build().user_data(0x4242).into();
-
     unsafe {
-        ring.submission().push(&nop_e).expect("queue is full");
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x4242);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;
@@ -94,12 +100,13 @@ pub fn test_defer_taskrun<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         };
 
         let timeout = types::Timespec::new().nsec(1_000_000);
-        let entry = opcode::Timeout::new(&timeout)
-            .build()
-            .user_data(0x42)
-            .into();
         unsafe {
-            ring.submission().push(&entry).expect("queue is full");
+            ring.submission()
+                .push(|entry: &mut S| {
+                    opcode::Timeout::new(entry, &timeout).user_data(0x42);
+                })
+                .ok()
+                .expect("queue is full");
         }
         ring.submitter().submit()?;
 
@@ -142,21 +149,33 @@ pub fn test_batch<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert!(ring.completion().is_empty());
 
     unsafe {
-        let sqes = vec![opcode::Nop::new().build().user_data(0x09).into(); 5];
-        let mut sq = ring.submission();
+        let sq = ring.submission();
 
         assert_eq!(sq.capacity(), 8);
 
-        sq.push_multiple(&sqes).unwrap();
+        for _ in 0..5 {
+            sq.push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x09);
+            })
+            .ok()
+            .expect("queue is full");
+        }
 
         assert_eq!(sq.len(), 5);
 
-        let ret = sq.push_multiple(&sqes);
-        assert!(ret.is_err());
+        // an all-or-nothing batch of 5 more entries does not fit, only 3 slots are left
+        sq.sync();
+        assert!(sq.capacity() - sq.len() < 5);
 
         assert_eq!(sq.len(), 5);
 
-        sq.push_multiple(&sqes[..3]).unwrap();
+        for _ in 0..3 {
+            sq.push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x09);
+            })
+            .ok()
+            .expect("queue is full");
+        }
     }
 
     ring.submit_and_wait(8)?;
@@ -185,14 +204,17 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     println!("test queue_split");
 
-    let (submitter, mut sq, mut cq) = ring.split();
+    let (submitter, sq, mut cq) = ring.split();
 
     assert!(sq.is_empty());
 
     for _ in 0..sq.capacity() {
         unsafe {
-            sq.push(&opcode::Nop::new().build().user_data(0x42).into())
-                .expect("queue is full");
+            sq.push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x42);
+            })
+            .ok()
+            .expect("queue is full");
         }
     }
 
@@ -214,14 +236,15 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     // the whole ring was consumed, reused slots must be zeroed
     unsafe {
-        sq.push_inline(|entry: &mut S| {
+        sq.push(|entry: &mut S| {
             let bytes = std::slice::from_raw_parts(
                 (entry as *const S).cast::<u8>(),
                 std::mem::size_of::<S>(),
             );
             assert!(bytes.iter().all(|b| *b == 0), "reused sqe is not zeroed");
-            *entry = opcode::Nop::new().build().into();
+            opcode::Nop::new(entry);
         })
+        .ok()
         .expect("queue is full");
     }
     sq.sync();
@@ -242,12 +265,15 @@ pub fn test_debug_print<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     println!("test debug_print");
 
-    let mut sq = ring.submission();
+    let sq = ring.submission();
     let num_to_sub = sq.capacity();
     for _ in 0..num_to_sub {
         unsafe {
-            sq.push(&opcode::Nop::new().build().user_data(0x42).into())
-                .expect("queue is full");
+            sq.push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x42);
+            })
+            .ok()
+            .expect("queue is full");
         }
     }
     println!("Full: {:?}", sq);
@@ -289,11 +315,10 @@ pub fn test_msg_ring_data<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let user_data = 85; // b'U'
     unsafe {
         ring.submission()
-            .push(
-                &opcode::MsgRingData::new(fd, result, user_data, None)
-                    .build()
-                    .into(),
-            )
+            .push(|entry: &mut S| {
+                opcode::MsgRingData::new(entry, fd, result, user_data, None);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -356,11 +381,10 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         let fd = types::Fd(temp_ring.as_raw_fd());
         let dest_slot = types::DestinationSlot::try_from_slot_target(1).unwrap();
         ring.submission()
-            .push(
-                &opcode::MsgRingSendFd::new(fd, types::Fixed(0), dest_slot, 22)
-                    .build()
-                    .into(),
-            )
+            .push(|entry: &mut S| {
+                opcode::MsgRingSendFd::new(entry, fd, types::Fixed(0), dest_slot, 22);
+            })
+            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -391,7 +415,10 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         let dest_slot = types::DestinationSlot::try_from_slot_target(2).unwrap();
         temp_ring
             .submission()
-            .push(&opcode::MsgRingSendFd::new(fd, types::Fixed(1), dest_slot, 44).build())
+            .push(|entry| {
+                opcode::MsgRingSendFd::new(entry, fd, types::Fixed(1), dest_slot, 44);
+            })
+            .ok()
             .expect("queue is full");
     }
     temp_ring.submit_and_wait(1)?;
@@ -435,9 +462,13 @@ pub fn test_completion_status<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     assert!(status.is_empty());
 
-    let nop_e = opcode::Nop::new().build().user_data(0x43).into();
     unsafe {
-        ring.submission().push(&nop_e).expect("queue is full");
+        ring.submission()
+            .push(|entry: &mut S| {
+                opcode::Nop::new(entry).user_data(0x43);
+            })
+            .ok()
+            .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
 

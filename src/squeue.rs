@@ -1,11 +1,11 @@
 //! Submission Queue
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::{cell::Cell, error::Error, mem, sync::atomic};
+use std::fmt::{self, Debug, Formatter};
+use std::{cell::Cell, mem, sync::atomic};
 
 use bitflags::bitflags;
 
-use crate::{sys, util::private, util::unsync_load, util::Mmap};
+use crate::{sys, util::Mmap, util::private, util::unsync_load};
 
 pub(crate) struct Inner<E: EntryMarker> {
     pub(crate) head: *const atomic::AtomicU32,
@@ -20,7 +20,7 @@ pub(crate) struct Inner<E: EntryMarker> {
     pub(crate) local_head: Cell<u32>,
     pub(crate) local_tail: Cell<u32>,
 
-    /// Set while a `push_inline` closure runs, to detect re-entrant pushes.
+    /// Set while a `push` closure runs, to detect re-entrant pushes.
     #[cfg(debug_assertions)]
     pushing: Cell<bool>,
 }
@@ -36,7 +36,7 @@ impl<'a, E: EntryMarker> Copy for SubmissionQueue<'a, E> {}
 /// A submission queue entry (SQE), representing a request for an I/O operation.
 ///
 /// This is implemented for [`Entry`] and [`Entry128`].
-pub trait EntryMarker: Clone + Debug + From<Entry> + private::Sealed {
+pub trait EntryMarker: Clone + Debug + From<Entry> + AsMut<Entry> + private::Sealed {
     const BUILD_FLAGS: u32;
 
     /// Set the application-supplied user data.
@@ -48,20 +48,20 @@ pub trait EntryMarker: Clone + Debug + From<Entry> + private::Sealed {
 
 /// A 64-byte submission queue entry (SQE), representing a request for an I/O operation.
 ///
-/// These can be created via opcodes in [`opcode`](crate::opcode).
+/// These are initialized in place via opcodes in [`opcode`](crate::opcode).
 ///
 /// # Example
 ///
 /// ```
-/// use ntex_io_uring::{opcode, types};
+/// use ntex_io_uring::{opcode, squeue::Entry, types};
 /// use std::ffi::CString;
 ///
 /// let path = CString::new("/etc/passwd").unwrap();
 ///
-/// // Create an Entry to open /etc/passwd for reading
-/// let entry = opcode::OpenAt::new(types::Fd(libc::AT_FDCWD), path.as_ptr())
+/// // Initialize an Entry to open /etc/passwd for reading
+/// let mut entry = Entry::default();
+/// opcode::OpenAt::new(&mut entry, types::Fd(libc::AT_FDCWD), path.as_ptr())
 ///     .flags(libc::O_RDONLY)
-///     .build()
 ///     .user_data(0x42);
 /// ```
 #[repr(C)]
@@ -69,24 +69,22 @@ pub struct Entry(pub(crate) sys::io_uring_sqe);
 
 /// A 128-byte submission queue entry (SQE), representing a request for an I/O operation.
 ///
-/// These can be created via opcodes in [`opcode`](crate::opcode), or by converting
+/// These are initialized in place via opcodes in [`opcode`](crate::opcode), or by converting
 /// from an [`Entry`] using the [`From`] trait.
 ///
 /// # Example
 ///
 /// ```
-/// use ntex_io_uring::{opcode, squeue::Entry128, types};
+/// use ntex_io_uring::{opcode, squeue::{Entry, Entry128}, types};
 /// use std::ffi::CString;
 ///
 /// let path = CString::new("/etc/passwd").unwrap();
 ///
-/// // Create an Entry128 to open /etc/passwd for reading
-/// let entry = Entry128::from(
-///     opcode::OpenAt::new(types::Fd(libc::AT_FDCWD), path.as_ptr())
-///         .flags(libc::O_RDONLY)
-///         .build()
-///         .user_data(0x42)
-/// );
+/// // Initialize an Entry128 to open /etc/passwd for reading
+/// let mut entry = Entry128::from(Entry::default());
+/// opcode::OpenAt::new(&mut entry, types::Fd(libc::AT_FDCWD), path.as_ptr())
+///     .flags(libc::O_RDONLY)
+///     .user_data(0x42);
 /// ```
 #[repr(C)]
 #[derive(Clone)]
@@ -106,11 +104,13 @@ fn test_user_data() {
         previous
     }
 
-    let mut entry = crate::opcode::Nop::new().build().user_data(1);
+    let mut entry = Entry::default();
+    crate::opcode::Nop::new(&mut entry).user_data(1);
     assert_eq!(replace(&mut entry, 2), 1);
     assert_eq!(entry.get_user_data(), 2);
 
-    let mut entry = Entry128::from(crate::opcode::Nop::new().build().user_data(3));
+    let mut entry = Entry128::from(Entry::default());
+    crate::opcode::Nop::new(&mut entry).user_data(3);
     assert_eq!(replace(&mut entry, 4), 3);
     assert_eq!(entry.get_user_data(), 4);
 }
@@ -245,12 +245,12 @@ impl<E: EntryMarker> Inner<E> {
         #[cfg(debug_assertions)]
         assert!(
             !self.pushing.get(),
-            "submission queue push from within a `push_inline` closure"
+            "submission queue push from within a `push` closure"
         );
     }
 }
 
-/// Marks the queue as inside a `push_inline` closure; cleared on drop, including on unwind.
+/// Marks the queue as inside a `push` closure; cleared on drop, including on unwind.
 #[cfg(debug_assertions)]
 struct PushGuard<'a>(&'a Cell<bool>);
 
@@ -275,8 +275,7 @@ pub(crate) unsafe fn publish_tail(tail: *const atomic::AtomicU32, local_tail: u3
 impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Synchronize this type with the real submission queue.
     ///
-    /// This will flush any entries added by [`push`](Self::push) or
-    /// [`push_multiple`](Self::push_multiple) and will update the queue's length if the kernel has
+    /// This will flush any entries added by [`push`](Self::push) and will update the queue's length if the kernel has
     /// consumed some entries in the meantime.
     #[inline]
     pub fn sync(&self) {
@@ -374,56 +373,39 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
         self.len() == self.capacity()
     }
 
-    /// Check that `n` entries can be pushed, synchronizing with the kernel if the queue looks full.
+    /// Check that an entry can be pushed, synchronizing with the kernel if the queue looks full.
     #[inline]
-    fn has_space(&self, n: usize) -> bool {
-        if self.capacity() - self.len() >= n {
+    fn has_space(&self) -> bool {
+        if !self.is_full() {
             true
         } else {
             self.queue.sync_cold();
-            self.capacity() - self.len() >= n
+            !self.is_full()
         }
     }
 
     /// Attempts to push an entry into the queue, initializing it in place with `f`.
-    /// The entry passed to `f` is zeroed.
-    /// If the queue is full, an error is returned and `f` is not called.
+    ///
+    /// The entry passed to `f` is zeroed, initialize it with an [`opcode`](crate::opcode).
+    /// If the queue is full, `f` is returned without being called, so the caller can
+    /// initialize the entry elsewhere without checking for space beforehand.
     ///
     /// # Safety
     ///
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     ///
-    /// `f` must not push to this submission queue (via [`push`](Self::push),
-    /// [`push_inline`](Self::push_inline) or [`push_multiple`](Self::push_multiple)). The entry
-    /// is not reserved until `f` returns, so a nested push would alias the entry being
-    /// initialized and could submit a stale entry or overrun the queue. Debug builds panic on
-    /// such a nested push.
+    /// `f` must not push to this submission queue. The entry is not reserved until `f` returns,
+    /// so a nested push would alias the entry being initialized and could submit a stale entry
+    /// or overrun the queue. Debug builds panic on such a nested push.
     #[inline]
     #[track_caller]
-    pub unsafe fn push_inline<F>(&self, f: F) -> Result<(), PushError>
-    where
-        F: FnOnce(&mut E),
-    {
-        self.try_push_inline(f).map_err(|_| PushError)
-    }
-
-    /// Attempts to push an entry into the queue, initializing it in place with `f`.
-    /// The entry passed to `f` is zeroed.
-    /// If the queue is full, `f` is returned without being called, so the caller can
-    /// initialize the entry elsewhere without checking for space beforehand.
-    ///
-    /// # Safety
-    ///
-    /// Same as [`push_inline`](Self::push_inline).
-    #[inline]
-    #[track_caller]
-    pub unsafe fn try_push_inline<F>(&self, f: F) -> Result<(), F>
+    pub unsafe fn push<F>(&self, f: F) -> Result<(), F>
     where
         F: FnOnce(&mut E),
     {
         self.queue.debug_assert_not_pushing();
-        if self.has_space(1) {
+        if self.has_space() {
             #[cfg(debug_assertions)]
             let _guard = {
                 self.queue.pushing.set(true);
@@ -444,62 +426,6 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
         } else {
             Err(f)
         }
-    }
-
-    /// Attempts to push an entry into the queue.
-    /// If the queue is full, an error is returned.
-    ///
-    /// # Safety
-    ///
-    /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
-    /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
-    #[inline]
-    #[track_caller]
-    pub unsafe fn push(&self, entry: &E) -> Result<(), PushError> {
-        self.queue.debug_assert_not_pushing();
-        if self.has_space(1) {
-            self.push_unchecked(entry);
-            Ok(())
-        } else {
-            Err(PushError)
-        }
-    }
-
-    /// Attempts to push several entries into the queue.
-    /// If the queue does not have space for all of the entries, an error is returned.
-    ///
-    /// # Safety
-    ///
-    /// Developers must ensure that parameters of all the entries (such as buffer) are valid and
-    /// will be valid for the entire duration of the operation, otherwise it may cause memory
-    /// problems.
-    #[inline]
-    #[track_caller]
-    pub unsafe fn push_multiple(&self, entries: &[E]) -> Result<(), PushError> {
-        self.queue.debug_assert_not_pushing();
-        if !self.has_space(entries.len()) {
-            return Err(PushError);
-        }
-
-        let mut tail = self.queue.local_tail.get();
-        for entry in entries {
-            *self.queue.sqes.add((tail & self.queue.ring_mask) as usize) = entry.clone();
-            tail = tail.wrapping_add(1);
-        }
-        self.queue.local_tail.set(tail);
-
-        Ok(())
-    }
-
-    #[inline]
-    unsafe fn push_unchecked(&self, entry: &E) {
-        *self
-            .queue
-            .sqes
-            .add((self.queue.local_tail.get() & self.queue.ring_mask) as usize) = entry.clone();
-        self.queue
-            .local_tail
-            .set(self.queue.local_tail.get().wrapping_add(1));
     }
 }
 
@@ -552,6 +478,13 @@ impl Entry {
     }
 }
 
+impl AsMut<Entry> for Entry {
+    #[inline]
+    fn as_mut(&mut self) -> &mut Entry {
+        self
+    }
+}
+
 impl Default for Entry {
     fn default() -> Self {
         Self(unsafe { mem::zeroed() })
@@ -596,14 +529,14 @@ impl Entry128 {
     /// Set the submission event's [flags](Flags).
     #[inline]
     pub fn flags(mut self, flags: Flags) -> Entry128 {
-        self.0 .0.flags |= flags.bits();
+        self.0.0.flags |= flags.bits();
         self
     }
 
     /// Clear the submission event's [flags](Flags).
     #[inline]
     pub fn clear_flags(mut self) -> Entry128 {
-        self.0 .0.flags = 0;
+        self.0.0.flags = 0;
         self
     }
 
@@ -611,34 +544,34 @@ impl Entry128 {
     /// through into the [completion queue entry](crate::cqueue::Entry::user_data).
     #[inline]
     pub fn user_data(mut self, user_data: u64) -> Entry128 {
-        self.0 .0.user_data = user_data;
+        self.0.0.user_data = user_data;
         self
     }
 
     /// Set the user data without consuming the entry.
     #[inline]
     pub fn set_user_data(&mut self, user_data: u64) {
-        self.0 .0.user_data = user_data;
+        self.0.0.user_data = user_data;
     }
 
     /// Get the previously application-supplied user data.
     #[inline]
     pub fn get_user_data(&self) -> u64 {
-        self.0 .0.user_data
+        self.0.0.user_data
     }
 
     /// Set the personality of this event. You can obtain a personality using
     /// [`Submitter::register_personality`](crate::Submitter::register_personality).
     #[inline]
     pub fn personality(mut self, personality: u16) -> Entry128 {
-        self.0 .0.personality = personality;
+        self.0.0.personality = personality;
         self
     }
 
     /// Get the opcode associated with this entry.
     #[inline]
     pub fn get_opcode(&self) -> u32 {
-        self.0 .0.opcode.into()
+        self.0.0.opcode.into()
     }
 }
 
@@ -658,6 +591,13 @@ impl EntryMarker for Entry128 {
     }
 }
 
+impl AsMut<Entry> for Entry128 {
+    #[inline]
+    fn as_mut(&mut self) -> &mut Entry {
+        &mut self.0
+    }
+}
+
 impl From<Entry> for Entry128 {
     fn from(entry: Entry) -> Entry128 {
         Entry128(entry, [0u8; 64])
@@ -667,25 +607,12 @@ impl From<Entry> for Entry128 {
 impl Debug for Entry128 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Entry128")
-            .field("op_code", &self.0 .0.opcode)
-            .field("flags", &self.0 .0.flags)
-            .field("user_data", &self.0 .0.user_data)
+            .field("op_code", &self.0.0.opcode)
+            .field("flags", &self.0.0.flags)
+            .field("user_data", &self.0.0.user_data)
             .finish()
     }
 }
-
-/// An error pushing to the submission queue due to it being full.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct PushError;
-
-impl Display for PushError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str("submission queue is full")
-    }
-}
-
-impl Error for PushError {}
 
 impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -702,59 +629,70 @@ impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
 
 #[cfg(all(test, debug_assertions))]
 mod tests {
-    use crate::{opcode, IoUring};
+    use crate::{IoUring, opcode};
 
     #[test]
-    #[should_panic(expected = "push from within a `push_inline` closure")]
-    fn push_inline_reentrant_push_panics() {
+    #[should_panic(expected = "push from within a `push` closure")]
+    fn push_reentrant_push_panics() {
         let ring = IoUring::new(4).unwrap();
         let sq = ring.submission();
         unsafe {
-            let _ = sq.push_inline(|e| {
-                *e = opcode::Nop::new().build();
-                let _ = sq.push(&opcode::Nop::new().build());
+            let _ = sq.push(|e| {
+                opcode::Nop::new(e);
+                let _ = sq.push(|e| {
+                    opcode::Nop::new(e);
+                });
             });
         }
     }
 
     #[test]
-    fn push_inline_guard_reset_after_panic() {
+    fn push_guard_reset_after_panic() {
         let ring = IoUring::new(4).unwrap();
         let sq = ring.submission();
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            let _ = sq.push_inline(|_| panic!("boom"));
+            let _ = sq.push(|_| panic!("boom"));
         }));
         assert!(res.is_err());
         unsafe {
-            sq.push_inline(|e| *e = opcode::Nop::new().build()).unwrap();
-            sq.push(&opcode::Nop::new().build()).unwrap();
+            assert!(
+                sq.push(|e| {
+                    opcode::Nop::new(e);
+                })
+                .is_ok()
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod push_tests {
-    use crate::{opcode, IoUring};
+    use crate::{IoUring, opcode};
 
     #[test]
-    fn try_push_inline_unsynced() {
+    fn push_unsynced() {
         let ring = IoUring::new(2).unwrap();
         let sq = ring.submission_unsynced();
         unsafe {
             for _ in 0..sq.capacity() {
-                assert!(sq
-                    .try_push_inline(|e| *e = opcode::Nop::new().build())
-                    .is_ok());
+                assert!(
+                    sq.push(|e| {
+                        opcode::Nop::new(e);
+                    })
+                    .is_ok()
+                );
             }
             let f = sq
-                .try_push_inline(|e| *e = opcode::Nop::new().build().user_data(7))
+                .push(|e| {
+                    opcode::Nop::new(e).user_data(7);
+                })
                 .unwrap_err();
             assert!(sq.is_full());
 
             // submission publishes the tail of the unsynced queue
             assert_eq!(ring.submitter().submit_and_wait(2).unwrap(), 2);
             // the stale head is synchronized by the push
-            assert!(sq.try_push_inline(f).is_ok());
+            assert!(sq.push(f).is_ok());
             assert_eq!(sq.len(), 1);
             assert_eq!(ring.submitter().submit_and_wait(3).unwrap(), 1);
 

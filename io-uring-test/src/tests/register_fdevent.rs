@@ -29,10 +29,13 @@ fn register_fdevent<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 fn submit_nop<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
 ) -> anyhow::Result<()> {
-    let entry = opcode::Nop::new().build().into();
-
     unsafe {
-        ring.submission().push(&entry).expect("queue is full");
+        ring.submission()
+            .push(|entry| {
+                opcode::Nop::new(entry);
+            })
+            .ok()
+            .expect("queue is full");
     }
 
     ring.submit_and_wait(1)?;

@@ -1,14 +1,14 @@
 [package]
 name = "ntex-io-uring"
-version = "0.8.7150"
-authors = ["quininer <quininer@live.com>"]
-edition = "2021"
+version = "1.0.0"
+authors = ["quininer <quininer@live.com>", "Nikolay Kim <fafhrd91@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/fafhrd91/io-uring"
 homepage = "https://github.com/fafhrd91/io-uring"
 documentation = "https://docs.rs/ntex-io-uring"
 description = "The low-level `io_uring` userspace interface for Rust"
 categories = [ "asynchronous", "network-programming", "filesystem" ]
+edition = "2024"
 rust-version = "1.97"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

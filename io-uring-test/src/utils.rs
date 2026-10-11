@@ -61,19 +61,22 @@ pub fn write_read<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let text = b"The quick brown fox jumps over the lazy dog.";
     let mut output = vec![0; text.len()];
 
-    let write_e = opcode::Write::new(fd_in, text.as_ptr(), text.len() as _);
-    let read_e = opcode::Read::new(fd_out, output.as_mut_ptr(), output.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let write_e = write_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&write_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&read_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::Write::new(entry, fd_in, text.as_ptr(), text.len() as _)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Read::new(entry, fd_out, output.as_mut_ptr(), output.len() as _)
+                    .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 
@@ -105,19 +108,27 @@ pub fn writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let text3 = [IoSlice::new(text), IoSlice::new(text2)];
     let mut output3 = vec![IoSliceMut::new(&mut output), IoSliceMut::new(&mut output2)];
 
-    let write_e = opcode::Writev::new(fd_in, text3.as_ptr().cast(), text3.len() as _);
-    let read_e = opcode::Readv::new(fd_out, output3.as_mut_ptr().cast(), output3.len() as _);
-
     unsafe {
-        let mut queue = ring.submission();
-        let write_e = write_e
-            .build()
-            .user_data(0x01)
-            .flags(squeue::Flags::IO_LINK)
-            .into();
-        queue.push(&write_e).expect("queue is full");
+        let queue = ring.submission();
         queue
-            .push(&read_e.build().user_data(0x02).into())
+            .push(|entry| {
+                opcode::Writev::new(entry, fd_in, text3.as_ptr().cast(), text3.len() as _)
+                    .user_data(0x01)
+                    .sqe_flags(squeue::Flags::IO_LINK);
+            })
+            .ok()
+            .expect("queue is full");
+        queue
+            .push(|entry| {
+                opcode::Readv::new(
+                    entry,
+                    fd_out,
+                    output3.as_mut_ptr().cast(),
+                    output3.len() as _,
+                )
+                .user_data(0x02);
+            })
+            .ok()
             .expect("queue is full");
     }
 

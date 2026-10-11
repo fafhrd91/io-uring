@@ -42,29 +42,29 @@ pub fn test_register_sync_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>
     let mut buf = [0u8; 32];
     let mut nr_submitted = 0;
     for i in 0..11 {
-        let entry;
-        if i == 0 {
-            entry = opcode::Read::new(types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
-                .build()
-                .user_data(USER_DATA_0);
-        } else if (1..3).contains(&i) {
-            entry = opcode::Read::new(types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
-                .build()
-                .user_data(USER_DATA_1);
-        } else if (3..5).contains(&i) {
-            entry = opcode::Read::new(types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
-                .build()
-                .user_data(USER_DATA_2);
-        } else if (5..8).contains(&i) {
-            entry = opcode::Read::new(types::Fixed(0), buf.as_mut_ptr(), 32)
-                .build()
-                .user_data(USER_DATA_3);
-        } else {
-            entry = opcode::Read::new(types::Fd(fd_2.as_raw_fd()), buf.as_mut_ptr(), 32)
-                .build()
-                .user_data(USER_DATA_4);
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    if i == 0 {
+                        opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
+                            .user_data(USER_DATA_0);
+                    } else if (1..3).contains(&i) {
+                        opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
+                            .user_data(USER_DATA_1);
+                    } else if (3..5).contains(&i) {
+                        opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
+                            .user_data(USER_DATA_2);
+                    } else if (5..8).contains(&i) {
+                        opcode::Read::new(entry, types::Fixed(0), buf.as_mut_ptr(), 32)
+                            .user_data(USER_DATA_3);
+                    } else {
+                        opcode::Read::new(entry, types::Fd(fd_2.as_raw_fd()), buf.as_mut_ptr(), 32)
+                            .user_data(USER_DATA_4);
+                    }
+                })
+                .ok()
+                .expect("queue is full");
         }
-        unsafe { ring.submission().push(&entry.into()).unwrap() };
         nr_submitted += ring.submit()?;
     }
     // 11 operations should have been submitted.
@@ -144,10 +144,15 @@ pub fn test_register_sync_cancel_any<S: squeue::EntryMarker, C: cqueue::EntryMar
     let mut buf = [0u8; 32];
 
     for i in 0..3 {
-        let entry = opcode::Read::new(types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
-            .build()
-            .user_data(START_USER_DATA + i);
-        unsafe { ring.submission().push(&entry.into()).unwrap() };
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
+                        .user_data(START_USER_DATA + i);
+                })
+                .ok()
+                .expect("queue is full");
+        }
     }
     // Submit all 3 operations.
     assert_eq!(3, ring.submit()?);
@@ -194,10 +199,15 @@ pub fn test_register_sync_cancel_unsubmitted<S: squeue::EntryMarker, C: cqueue::
     const USER_DATA: u64 = 47u64;
 
     let mut buf = [0u8; 32];
-    let entry = opcode::Read::new(types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
-        .build()
-        .user_data(USER_DATA);
-    unsafe { ring.submission().push(&entry.into()).unwrap() };
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
+                    .user_data(USER_DATA);
+            })
+            .ok()
+            .expect("queue is full");
+    }
 
     // Cancel the operation by user_data, we haven't submitted anything yet. We should get an error.
     let result = ring
