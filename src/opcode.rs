@@ -62,10 +62,38 @@ macro_rules! opcode_common {
     };
 }
 
+#[inline(always)]
+fn reset_entry(entry: &mut impl AsMut<Entry>) -> &mut sys::io_uring_sqe {
+    let entry = entry.as_mut();
+    *entry = Entry::default();
+    &mut entry.0
+}
+
+#[inline(always)]
+fn reset_entry128(entry: &mut Entry128) -> &mut sys::io_uring_sqe {
+    *entry = Entry128(Entry::default(), [0; 64]);
+    &mut entry.0.0
+}
+
 macro_rules! opcode {
     (
         $( #[$outer:meta] )*
         pub struct $name:ident = $code:expr;
+        $( $rest:tt )*
+    ) => {
+        opcode! { @impl [impl AsMut<Entry>] reset_entry; $( #[$outer] )* $name = $code; $( $rest )* }
+    };
+    (
+        $( #[$outer:meta] )*
+        pub struct $name:ident = $code:expr, Entry128;
+        $( $rest:tt )*
+    ) => {
+        opcode! { @impl [Entry128] reset_entry128; $( #[$outer] )* $name = $code; $( $rest )* }
+    };
+    (
+        @impl [ $( $ety:tt )+ ] $reset:ident;
+        $( #[$outer:meta] )*
+        $name:ident = $code:expr;
 
         $( #[$new_meta:meta] )*
         fn new($sqe:ident $(, $arg:ident : $aty:ty )* $(,)?) $new_body:block
@@ -92,10 +120,8 @@ macro_rules! opcode {
             )]
             $( #[$new_meta] )*
             #[inline]
-            pub fn new(entry: &'a mut impl AsMut<Entry> $(, $arg: $aty )*) -> Self {
-                let entry = entry.as_mut();
-                *entry = Entry::default();
-                let $sqe = &mut entry.0;
+            pub fn new(entry: &'a mut $( $ety )+ $(, $arg: $aty )*) -> Self {
+                let $sqe = $reset(entry);
                 $sqe.opcode = Self::CODE;
                 $new_body
                 Self { sqe: $sqe }
@@ -118,60 +144,78 @@ macro_rules! opcode {
     };
 }
 
-opcode! {
+macro_rules! nop {
+    ( $( #[$outer:meta] )* pub struct $name:ident = $code:expr $(, $e:ident )?; ) => {
+        opcode! {
+            $( #[$outer] )*
+            pub struct $name = $code $(, $e )?;
+
+            fn new(sqe) {
+                sqe.fd = -1;
+            }
+
+            /// Complete with `result` instead of `0`. Available since 6.10.
+            fn inject_result(sqe, result: i32) {
+                sqe.len = result as u32;
+                unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_INJECT_RESULT };
+            }
+
+            /// Look up `fd` when the request is issued, completing with `-EBADF` if it is not valid.
+            /// Available since 6.13.
+            fn file(sqe, fd: impl sealed::UseFixed) {
+                let flags = match sealed::UseFixed::into(fd) {
+                    sealed::Target::Fd(fd) => {
+                        sqe.fd = fd;
+                        sys::IORING_NOP_FILE
+                    }
+                    sealed::Target::Fixed(idx) => {
+                        sqe.fd = idx as _;
+                        sys::IORING_NOP_FILE | sys::IORING_NOP_FIXED_FILE
+                    }
+                };
+                unsafe { sqe.__bindgen_anon_3.nop_flags |= flags };
+            }
+
+            /// Look up the registered buffer `buf_index` when the request is issued, completing
+            /// with `-EFAULT` if it is not valid. Available since 6.13.
+            fn buf_index(sqe, buf_index: u16) {
+                sqe.__bindgen_anon_4.buf_index = buf_index;
+                unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_FIXED_BUFFER };
+            }
+
+            /// Complete the request through task work. Available since 6.17.
+            fn task_work(sqe) {
+                unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_TW };
+            }
+
+            /// Post a 32-byte completion with `extra1` and `extra2` as its
+            /// [big CQE](crate::cqueue::Entry32::big_cqe) data.
+            ///
+            /// The ring must use [`cqueue::Entry32`](crate::cqueue::Entry32) completions, otherwise
+            /// the request fails with `-EINVAL`. Available since 6.18.
+            fn cqe32(sqe, extra1: u64, extra2: u64) {
+                sqe.__bindgen_anon_1.off = extra1;
+                sqe.__bindgen_anon_2.addr = extra2;
+                unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_CQE32 };
+            }
+        }
+    };
+}
+
+nop! {
     /// Do not perform any I/O.
     ///
     /// This is useful for testing the performance of the io_uring implementation itself.
     pub struct Nop = sys::IORING_OP_NOP;
+}
 
-    fn new(sqe) {
-        sqe.fd = -1;
-    }
-
-    /// Complete with `result` instead of `0`. Available since 6.10.
-    fn inject_result(sqe, result: i32) {
-        sqe.len = result as u32;
-        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_INJECT_RESULT };
-    }
-
-    /// Look up `fd` when the request is issued, completing with `-EBADF` if it is not valid.
-    /// Available since 6.13.
-    fn file(sqe, fd: impl sealed::UseFixed) {
-        let flags = match sealed::UseFixed::into(fd) {
-            sealed::Target::Fd(fd) => {
-                sqe.fd = fd;
-                sys::IORING_NOP_FILE
-            }
-            sealed::Target::Fixed(idx) => {
-                sqe.fd = idx as _;
-                sys::IORING_NOP_FILE | sys::IORING_NOP_FIXED_FILE
-            }
-        };
-        unsafe { sqe.__bindgen_anon_3.nop_flags |= flags };
-    }
-
-    /// Look up the registered buffer `buf_index` when the request is issued, completing
-    /// with `-EFAULT` if it is not valid. Available since 6.13.
-    fn buf_index(sqe, buf_index: u16) {
-        sqe.__bindgen_anon_4.buf_index = buf_index;
-        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_FIXED_BUFFER };
-    }
-
-    /// Complete the request through task work. Available since 6.17.
-    fn task_work(sqe) {
-        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_TW };
-    }
-
-    /// Post a 32-byte completion with `extra1` and `extra2` as its
-    /// [big CQE](crate::cqueue::Entry32::big_cqe) data.
+nop! {
+    /// A 128-byte [`Nop`], for queues set up with
+    /// [`setup_sqe_mixed`](crate::Builder::setup_sqe_mixed) or `Entry128` queues.
     ///
-    /// The ring must use [`cqueue::Entry32`](crate::cqueue::Entry32) completions, otherwise
-    /// the request fails with `-EINVAL`. Available since 6.18.
-    fn cqe32(sqe, extra1: u64, extra2: u64) {
-        sqe.__bindgen_anon_1.off = extra1;
-        sqe.__bindgen_anon_2.addr = extra2;
-        unsafe { sqe.__bindgen_anon_3.nop_flags |= sys::IORING_NOP_CQE32 };
-    }
+    /// Push it to a mixed queue with
+    /// [`SubmissionQueue::push128`](crate::SubmissionQueue::push128). Available since 6.19.
+    pub struct Nop128 = sys::IORING_OP_NOP128, Entry128;
 }
 
 opcode! {
@@ -1578,82 +1622,103 @@ opcode! {
     }
 }
 
-/// A file/device-specific 80-byte command, akin (but not equivalent) to `ioctl(2)`.
-///
-/// Requires an [`Entry128`] submission queue.
-pub struct UringCmd80<'a> {
-    sqe: &'a mut sys::io_uring_sqe,
-    cmd2: &'a mut [u8; 64],
+macro_rules! uring_cmd80 {
+    ( $( #[$outer:meta] )* pub struct $name:ident = $code:expr; ) => {
+        $( #[$outer] )*
+        pub struct $name<'a> {
+            sqe: &'a mut sys::io_uring_sqe,
+            cmd2: &'a mut [u8; 64],
+        }
+
+        impl<'a> $name<'a> {
+            /// The opcode of the operation. This can be passed to
+            /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
+            /// supported with the current kernel.
+            pub const CODE: u8 = $code as _;
+
+            #[doc = concat!(
+                "Initialize `entry` as a [`", stringify!($name), "`] operation with its ",
+                "required arguments.",
+            )]
+            ///
+            /// All fields of `entry` are reset first, see the [module docs](self).
+            #[inline]
+            pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
+                *entry = Entry128(Entry::default(), [0; 64]);
+                let Entry128(entry, cmd2) = entry;
+                let sqe = &mut entry.0;
+                sqe.opcode = Self::CODE;
+                assign_fd!(sqe, fd);
+                sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
+                Self { sqe, cmd2 }
+            }
+
+            /// The `buf_index` is an index into an array of fixed buffers,
+            /// and is only valid if fixed buffers were registered.
+            #[inline]
+            pub fn buf_index(self, buf_index: Option<u16>) -> Self {
+                if let Some(buf_index) = buf_index {
+                    self.sqe.__bindgen_anon_4.buf_index = buf_index;
+                    unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED };
+                }
+                self
+            }
+
+            /// Arbitrary command data.
+            #[inline]
+            pub fn cmd(self, cmd: [u8; 80]) -> Self {
+                let cmd1: [u8; 16] = cmd[..16].try_into().unwrap();
+                unsafe {
+                    *self
+                        .sqe
+                        .__bindgen_anon_6
+                        .cmd
+                        .as_mut()
+                        .as_mut_ptr()
+                        .cast::<[u8; 16]>() = cmd1
+                };
+                self.cmd2.copy_from_slice(&cmd[16..]);
+                self
+            }
+
+            /// `IORING_URING_CMD_*` flags, ORed with already set flags, see [`UringCmd16::flags`].
+            #[inline]
+            pub fn flags(self, flags: u32) -> Self {
+                unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= flags };
+                self
+            }
+
+            /// The `addr` is typically a pointer to buffer or iovecs,
+            /// but some file/device command also need to pass an addr.
+            /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
+            /// needs to set `addr` to some special value.
+            #[inline]
+            pub fn addr(self, addr: Option<u64>) -> Self {
+                if let Some(addr) = addr {
+                    self.sqe.__bindgen_anon_2.addr = addr;
+                }
+                self
+            }
+
+            opcode_common!();
+        }
+    };
 }
 
-impl<'a> UringCmd80<'a> {
-    /// The opcode of the operation. This can be passed to
-    /// [`Probe::is_supported`](crate::Probe::is_supported) to check if this operation is
-    /// supported with the current kernel.
-    pub const CODE: u8 = sys::IORING_OP_URING_CMD as _;
-
-    /// Initialize `entry` as a [`UringCmd80`] operation with its required arguments.
+uring_cmd80! {
+    /// A file/device-specific 80-byte command, akin (but not equivalent) to `ioctl(2)`.
     ///
-    /// All fields of `entry` are reset first, see the [module docs](self).
-    #[inline]
-    pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
-        *entry = Entry128(Entry::default(), [0; 64]);
-        let Entry128(entry, cmd2) = entry;
-        let sqe = &mut entry.0;
-        sqe.opcode = Self::CODE;
-        assign_fd!(sqe, fd);
-        sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
-        Self { sqe, cmd2 }
-    }
+    /// Requires an [`Entry128`] submission queue.
+    pub struct UringCmd80 = sys::IORING_OP_URING_CMD;
+}
 
-    /// The `buf_index` is an index into an array of fixed buffers,
-    /// and is only valid if fixed buffers were registered.
-    #[inline]
-    pub fn buf_index(self, buf_index: Option<u16>) -> Self {
-        if let Some(buf_index) = buf_index {
-            self.sqe.__bindgen_anon_4.buf_index = buf_index;
-            unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED };
-        }
-        self
-    }
-
-    /// Arbitrary command data.
-    #[inline]
-    pub fn cmd(self, cmd: [u8; 80]) -> Self {
-        let cmd1: [u8; 16] = cmd[..16].try_into().unwrap();
-        unsafe {
-            *self
-                .sqe
-                .__bindgen_anon_6
-                .cmd
-                .as_mut()
-                .as_mut_ptr()
-                .cast::<[u8; 16]>() = cmd1
-        };
-        self.cmd2.copy_from_slice(&cmd[16..]);
-        self
-    }
-
-    /// `IORING_URING_CMD_*` flags, ORed with already set flags, see [`UringCmd16::flags`].
-    #[inline]
-    pub fn flags(self, flags: u32) -> Self {
-        unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= flags };
-        self
-    }
-
-    /// The `addr` is typically a pointer to buffer or iovecs,
-    /// but some file/device command also need to pass an addr.
-    /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
-    /// needs to set `addr` to some special value.
-    #[inline]
-    pub fn addr(self, addr: Option<u64>) -> Self {
-        if let Some(addr) = addr {
-            self.sqe.__bindgen_anon_2.addr = addr;
-        }
-        self
-    }
-
-    opcode_common!();
+uring_cmd80! {
+    /// A file/device-specific 80-byte command for queues set up with
+    /// [`setup_sqe_mixed`](crate::Builder::setup_sqe_mixed), see [`UringCmd80`].
+    ///
+    /// Push it with [`SubmissionQueue::push128`](crate::SubmissionQueue::push128).
+    /// Available since 6.19.
+    pub struct UringCmd128 = sys::IORING_OP_URING_CMD128;
 }
 
 opcode! {
@@ -2670,5 +2735,30 @@ mod tests {
         MsgRingData::new(&mut entry, Fixed(2), 0, 1, None);
         assert_eq!(entry.0.fd, 2);
         assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
+    }
+
+    #[test]
+    fn entry128_ops_reset_tail() {
+        let mut entry = Entry128(Entry::default(), [0xff; 64]);
+        Nop128::new(&mut entry).inject_result(1).user_data(5);
+        assert_eq!(entry.get_opcode(), sys::IORING_OP_NOP128 as u8);
+        assert_eq!(entry.get_user_data(), 5);
+        assert_eq!(entry.0.0.len, 1);
+        assert_eq!(entry.1, [0; 64]);
+
+        entry.1 = [0xff; 64];
+        let mut cmd = [0u8; 80];
+        cmd[79] = 9;
+        UringCmd128::new(&mut entry, Fixed(2), 3).cmd(cmd);
+        assert_eq!(entry.get_opcode(), sys::IORING_OP_URING_CMD128 as u8);
+        assert_eq!(entry.0.0.fd, 2);
+        assert_eq!(entry.0.0.flags, Flags::FIXED_FILE.bits());
+        assert_eq!(
+            unsafe { entry.0.0.__bindgen_anon_1.__bindgen_anon_1.cmd_op },
+            3
+        );
+        assert_eq!(entry.1[..63], [0; 63]);
+        assert_eq!(entry.1[63], 9);
+        assert_eq!(UringCmd80::CODE, sys::IORING_OP_URING_CMD as u8);
     }
 }

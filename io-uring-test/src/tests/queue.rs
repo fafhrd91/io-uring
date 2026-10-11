@@ -131,6 +131,103 @@ pub fn test_defer_taskrun<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     Ok(())
 }
 
+pub fn test_sqe_mixed<C: cqueue::EntryMarker>(test: &Test) -> anyhow::Result<()> {
+    use std::net::UdpSocket;
+    use std::os::unix::io::AsRawFd;
+
+    require! {
+        test;
+        test.probe.is_supported(opcode::Nop128::CODE);
+        test.probe.is_supported(opcode::UringCmd128::CODE);
+    }
+
+    println!("test sqe_mixed");
+
+    let mut ring = match IoUring::<squeue::Entry, C>::builder()
+        .setup_sqe_mixed()
+        .build(4)
+    {
+        Ok(ring) => ring,
+        Err(err) => match err.raw_os_error() {
+            Some(libc::EINVAL) | Some(libc::EOPNOTSUPP) => {
+                println!("IORING_SETUP_SQE_MIXED is not supported by the kernel, skip");
+                return Ok(());
+            }
+            _ => return Err(err.into()),
+        },
+    };
+    assert!(ring.params().is_setup_sqe_mixed());
+
+    // a 64-byte entry followed by a 128-byte entry in slots 1 and 2
+    unsafe {
+        let sq = ring.submission();
+        sq.push(|entry| {
+            opcode::Nop::new(entry).user_data(1);
+        })
+        .expect("queue is full");
+        sq.push128(|entry| {
+            opcode::Nop128::new(entry).user_data(2);
+        })
+        .expect("queue is full");
+        assert_eq!(sq.len(), 3);
+    }
+    ring.submit_and_wait(2)?;
+    let mut cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
+    cqes.sort_by_key(|cqe| cqe.user_data());
+    assert_eq!(cqes.len(), 2);
+    assert_eq!((cqes[0].user_data(), cqes[0].result()), (1, 0));
+    assert_eq!((cqes[1].user_data(), cqes[1].result()), (2, 0));
+
+    // only the last slot is left before the ring wraps, it is padded with a silent nop
+    unsafe {
+        let sq = ring.submission();
+        sq.push128(|entry| {
+            opcode::Nop128::new(entry).inject_result(7).user_data(3);
+        })
+        .expect("queue is full");
+        assert_eq!(sq.len(), 3);
+    }
+    ring.submit_and_wait(1)?;
+    let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
+    assert_eq!(cqes.len(), 1);
+    assert_eq!((cqes[0].user_data(), cqes[0].result()), (3, 7));
+
+    // not enough room for the padding and both halves
+    unsafe {
+        let sq = ring.submission();
+        for i in 0..3 {
+            sq.push(|entry| {
+                opcode::Nop::new(entry).user_data(10 + i);
+            })
+            .expect("queue is full");
+        }
+        assert!(sq
+            .push128(|entry| {
+                opcode::Nop128::new(entry);
+            })
+            .is_err());
+    }
+    ring.submit_and_wait(3)?;
+    assert_eq!(ring.completion().count(), 3);
+
+    // SOCKET_URING_OP_SIOCINQ, the size of the pending datagram
+    let socket = UdpSocket::bind("127.0.0.1:0")?;
+    socket.send_to(b"abc", socket.local_addr()?)?;
+    unsafe {
+        ring.submission()
+            .push128(|entry| {
+                opcode::UringCmd128::new(entry, types::Fd(socket.as_raw_fd()), 0).user_data(4);
+            })
+            .expect("queue is full");
+    }
+    ring.submit_and_wait(1)?;
+    let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
+    assert_eq!(cqes.len(), 1);
+    assert_eq!((cqes[0].user_data(), cqes[0].result()), (4, 3));
+
+    Ok(())
+}
+
 pub fn test_batch<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
     test: &Test,

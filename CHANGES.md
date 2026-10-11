@@ -51,6 +51,10 @@
 * `CancelBuilder` can match by opcode and combine user_data, fd and opcode
   criteria: `CancelBuilder::opcode()`, `match_user_data()`, `match_fd()`, `match_opcode()`
 
+* Add `Builder::setup_sqe_mixed()`, `Parameters::is_setup_sqe_mixed()` and
+  `SubmissionQueue::push128()` for 128-byte entries in a 64-byte queue, add
+  `opcode::Nop128` and `opcode::UringCmd128`
+
 * Add missing op setters: `Nop` `inject_result()`, `file()`, `buf_index()`,
   `task_work()`, `cqe32()`; `PollAdd::level()`; `nanos()` and
   `TimeoutFlags::IMMEDIATE_ARG` for timeouts; `ioprio()` for `Accept`,

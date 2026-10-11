@@ -502,6 +502,17 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Builder<S, C> {
     }
 }
 
+impl<C: cqueue::EntryMarker> Builder<squeue::Entry, C> {
+    /// Allow 128-byte operations, such as [`Nop128`](opcode::Nop128) and
+    /// [`UringCmd128`](opcode::UringCmd128), in a queue of 64-byte entries. They are pushed
+    /// with [`SubmissionQueue::push128`] and take two slots. The queue needs at least 2 entries.
+    /// Available since 6.19.
+    pub fn setup_sqe_mixed(&mut self) -> &mut Self {
+        self.params.flags |= sys::IORING_SETUP_SQE_MIXED;
+        self
+    }
+}
+
 impl Parameters {
     /// Whether a kernel thread is performing queue polling. Enabled with [`Builder::setup_sqpoll`].
     pub fn is_setup_sqpoll(&self) -> bool {
@@ -512,6 +523,12 @@ impl Parameters {
     /// Enabled with [`Builder::setup_iopoll`].
     pub fn is_setup_iopoll(&self) -> bool {
         self.0.flags & sys::IORING_SETUP_IOPOLL != 0
+    }
+
+    /// Whether the submission queue accepts 128-byte operations.
+    /// Enabled with [`Builder::setup_sqe_mixed`].
+    pub fn is_setup_sqe_mixed(&self) -> bool {
+        self.0.flags & sys::IORING_SETUP_SQE_MIXED != 0
     }
 
     /// Whether the single issuer hint is enabled. Enabled with [`Builder::setup_single_issuer`].

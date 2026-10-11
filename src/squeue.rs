@@ -16,6 +16,8 @@ pub(crate) struct Inner<E: EntryMarker> {
     dropped: *const atomic::AtomicU32,
 
     pub(crate) sqes: *mut E,
+    /// The ring was set up with `IORING_SETUP_SQE_MIXED`.
+    mixed: bool,
 
     pub(crate) local_head: Cell<u32>,
     pub(crate) local_tail: Cell<u32>,
@@ -235,6 +237,7 @@ impl<E: EntryMarker> Inner<E> {
             flags,
             dropped,
             sqes,
+            mixed: p.flags & sys::IORING_SETUP_SQE_MIXED != 0,
             local_head,
             local_tail,
             #[cfg(debug_assertions)]
@@ -399,11 +402,17 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// Check that an entry can be pushed, synchronizing with the kernel if the queue looks full.
     #[inline]
     fn has_space(&self) -> bool {
-        if !self.is_full() {
+        self.has_space_for(1)
+    }
+
+    /// Check that `n` slots are free, synchronizing with the kernel if the queue looks too full.
+    #[inline]
+    fn has_space_for(&self, n: usize) -> bool {
+        if self.capacity() - self.len() >= n {
             true
         } else {
             self.queue.sync_cold();
-            !self.is_full()
+            self.capacity() - self.len() >= n
         }
     }
 
@@ -420,8 +429,9 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     ///
     /// `f` must initialize the entry with an opcode, otherwise the stale entry is resubmitted.
-    /// For [`Entry128`] queues, opcodes other than
-    /// [`UringCmd80`](crate::opcode::UringCmd80) reset only the first 64 bytes.
+    /// For [`Entry128`] queues, opcodes other than [`UringCmd80`](crate::opcode::UringCmd80),
+    /// [`UringCmd128`](crate::opcode::UringCmd128) and [`Nop128`](crate::opcode::Nop128)
+    /// reset only the first 64 bytes.
     ///
     /// `f` must not push to this submission queue. The entry is not reserved until `f` returns,
     /// so a nested push would alias the entry being initialized and could submit a stale entry
@@ -452,6 +462,81 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
         } else {
             Err(PushError(f))
         }
+    }
+}
+
+impl SubmissionQueue<'_, Entry> {
+    /// Attempts to push a 128-byte entry into a mixed queue, initializing it in place with `f`.
+    ///
+    /// The ring must be built with [`setup_sqe_mixed`](crate::Builder::setup_sqe_mixed).
+    /// The entry occupies two consecutive slots. If only the last slot of the ring is left before
+    /// it wraps, it is filled with a [`Nop`](crate::opcode::Nop) that posts no completion on
+    /// success and continues a link chain of the previous entry, so up to three slots are used.
+    /// If the queue does not have room, `f` is returned in a [`PushError`] without being called.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`push`](Self::push). In addition, `f` must initialize the entry with a 128-byte
+    /// opcode, [`Nop128`](crate::opcode::Nop128) or [`UringCmd128`](crate::opcode::UringCmd128),
+    /// otherwise the kernel consumes the second half of the entry as a separate stale entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring was not set up with `IORING_SETUP_SQE_MIXED`.
+    #[inline]
+    #[track_caller]
+    pub unsafe fn push128<F>(&self, f: F) -> Result<(), PushError<F>>
+    where
+        F: FnOnce(&mut Entry128),
+    {
+        assert!(
+            self.queue.mixed,
+            "push128 requires a ring set up with `setup_sqe_mixed`"
+        );
+        self.queue.debug_assert_not_pushing();
+
+        let mask = self.queue.ring_mask;
+        let pad = self.queue.local_tail.get() & mask == mask;
+        if !self.has_space_for(2 + pad as usize) {
+            return Err(PushError(f));
+        }
+
+        #[cfg(debug_assertions)]
+        let _guard = {
+            self.queue.pushing.set(true);
+            PushGuard(&self.queue.pushing)
+        };
+
+        let mut tail = self.queue.local_tail.get();
+        if pad {
+            let link = if self.is_empty() {
+                Flags::empty()
+            } else {
+                let prev = &*self.queue.sqes.add((tail.wrapping_sub(1) & mask) as usize);
+                prev.get_flags() & (Flags::IO_LINK | Flags::IO_HARDLINK)
+            };
+            let entry = &mut *self.queue.sqes.add((tail & mask) as usize);
+            crate::opcode::Nop::new(entry);
+            entry.set_flags(Flags::SKIP_SUCCESS | link);
+            tail = tail.wrapping_add(1);
+            self.queue.local_tail.set(tail);
+        }
+
+        let entry = self
+            .queue
+            .sqes
+            .add((tail & mask) as usize)
+            .cast::<Entry128>();
+        f(&mut *entry);
+        debug_assert!(
+            matches!(
+                (*entry).get_opcode(),
+                crate::opcode::Nop128::CODE | crate::opcode::UringCmd128::CODE
+            ),
+            "push128 entry must be initialized with a 128-byte opcode"
+        );
+        self.queue.local_tail.set(tail.wrapping_add(2));
+        Ok(())
     }
 }
 
@@ -727,6 +812,17 @@ mod tests {
 #[cfg(test)]
 mod push_tests {
     use crate::{IoUring, opcode};
+
+    #[test]
+    #[should_panic(expected = "push128 requires a ring set up with `setup_sqe_mixed`")]
+    fn push128_requires_mixed() {
+        let ring = IoUring::new(4).unwrap();
+        unsafe {
+            let _ = ring.submission().push128(|e| {
+                opcode::Nop128::new(e);
+            });
+        }
+    }
 
     #[test]
     fn push_unsynced() {
