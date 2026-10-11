@@ -38,7 +38,6 @@ fn bench_iovec(c: &mut Criterion) {
                             bufs.len() as _,
                         );
                     })
-                    .ok()
                     .expect("queue is full");
             }
 
@@ -74,14 +73,12 @@ fn bench_iovec(c: &mut Criterion) {
                         )
                         .sqe_flags(squeue::Flags::IO_LINK);
                     })
-                    .ok()
                     .expect("queue is full");
                 for _ in 0..4 {
                     queue
                         .push(|entry| {
                             opcode::Nop::new(entry).sqe_flags(squeue::Flags::IO_LINK);
                         })
-                        .ok()
                         .expect("queue is full");
                 }
             }
@@ -110,7 +107,6 @@ fn bench_iovec(c: &mut Criterion) {
                             )
                             .sqe_flags(squeue::Flags::IO_LINK);
                         })
-                        .ok()
                         .expect("queue is full");
                 }
             }
@@ -137,7 +133,6 @@ fn bench_iovec(c: &mut Criterion) {
                                 buf.len() as _,
                             );
                         })
-                        .ok()
                         .expect("queue is full");
                 }
 

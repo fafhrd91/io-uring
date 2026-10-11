@@ -146,7 +146,6 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         sq.push(|entry| {
             opcode::Nop::new(entry).user_data(0x42);
         })
-        .ok()
         .expect("submission queue is full");
     }
     sq.sync();
@@ -179,7 +178,6 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         sq.push(|entry| {
             opcode::Nop::new(entry).user_data(0x43);
         })
-        .ok()
         .expect("submission queue is full");
     }
     sq.sync();

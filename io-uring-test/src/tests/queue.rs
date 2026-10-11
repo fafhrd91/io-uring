@@ -18,7 +18,6 @@ pub fn test_nop<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x42);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -59,7 +58,6 @@ pub fn test_setup_no_sqarray<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x4242);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -105,7 +103,6 @@ pub fn test_defer_taskrun<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .push(|entry: &mut S| {
                     opcode::Timeout::new(entry, &timeout).user_data(0x42);
                 })
-                .ok()
                 .expect("queue is full");
         }
         ring.submitter().submit()?;
@@ -157,7 +154,6 @@ pub fn test_batch<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             sq.push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x09);
             })
-            .ok()
             .expect("queue is full");
         }
 
@@ -173,7 +169,6 @@ pub fn test_batch<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             sq.push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x09);
             })
-            .ok()
             .expect("queue is full");
         }
     }
@@ -213,7 +208,6 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             sq.push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x42);
             })
-            .ok()
             .expect("queue is full");
         }
     }
@@ -239,7 +233,6 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         sq.push(|entry: &mut S| {
             opcode::Nop::new(entry);
         })
-        .ok()
         .expect("queue is full");
     }
     sq.sync();
@@ -269,7 +262,6 @@ pub fn test_debug_print<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             sq.push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x42);
             })
-            .ok()
             .expect("queue is full");
         }
     }
@@ -314,7 +306,6 @@ pub fn test_msg_ring_data<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry: &mut S| {
                 opcode::MsgRingData::new(entry, fd, result, user_data, None);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -380,7 +371,6 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry: &mut S| {
                 opcode::MsgRingSendFd::new(entry, fd, types::Fixed(0), dest_slot, 22);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -414,7 +404,6 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::MsgRingSendFd::new(entry, fd, types::Fixed(1), dest_slot, 44);
             })
-            .ok()
             .expect("queue is full");
     }
     temp_ring.submit_and_wait(1)?;
@@ -463,7 +452,6 @@ pub fn test_completion_status<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry: &mut S| {
                 opcode::Nop::new(entry).user_data(0x43);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;

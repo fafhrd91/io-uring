@@ -23,7 +23,6 @@ pub fn test_timeout<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).user_data(0x09);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -48,13 +47,11 @@ pub fn test_timeout<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).user_data(0x0a);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Nop::new(entry).user_data(0x0b);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -105,13 +102,11 @@ pub fn test_timeout_count<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).count(1).user_data(0x0c);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Nop::new(entry).user_data(0x0d);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -154,7 +149,6 @@ pub fn test_timeout_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).user_data(0x10);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -168,7 +162,6 @@ pub fn test_timeout_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::TimeoutRemove::new(entry, 0x10).user_data(0x11);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -211,7 +204,6 @@ pub fn test_timeout_update<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).user_data(0x10);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -227,7 +219,6 @@ pub fn test_timeout_update<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::TimeoutUpdate::new(entry, 0x10, &ts).user_data(0x11);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -270,7 +261,6 @@ pub fn test_timeout_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Timeout::new(entry, &ts).user_data(0x10);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -284,7 +274,6 @@ pub fn test_timeout_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::AsyncCancel::new(entry, 0x10).user_data(0x11);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -337,7 +326,6 @@ pub fn test_timeout_abs<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .flags(types::TimeoutFlags::ABS)
                     .user_data(0x19);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -388,7 +376,6 @@ pub fn test_timeout_submit_args<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Nop::new(entry).user_data(0x1c);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -441,7 +428,6 @@ pub fn test_timeout_submit_args_min_wait<S: squeue::EntryMarker, C: cqueue::Entr
             .push(|entry| {
                 opcode::Nop::new(entry).user_data(0x1d);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -480,7 +466,6 @@ pub fn test_timeout_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .count(2)
                     .user_data(0x0c);
             })
-            .ok()
             .expect("queue is full");
     }
 

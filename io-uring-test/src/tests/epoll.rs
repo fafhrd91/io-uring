@@ -53,7 +53,6 @@ pub fn test_ready<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(REQ_TYPE_EPOLL_WAIT);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -107,7 +106,6 @@ pub fn test_not_ready<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(REQ_TYPE_EPOLL_WAIT);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -167,7 +165,6 @@ pub fn test_delete<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(REQ_TYPE_EPOLL_WAIT);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -260,7 +257,6 @@ pub fn test_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(REQ_TYPE_EPOLL_WAIT);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -361,7 +357,6 @@ pub fn test_race<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                         )
                         .user_data(REQ_TYPE_EPOLL_WAIT);
                     })
-                    .ok()
                     .expect("queue is full");
             }
 

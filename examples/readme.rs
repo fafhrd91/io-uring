@@ -21,7 +21,6 @@ fn main() -> io::Result<()> {
                 )
                 .user_data(0x42);
             })
-            .ok()
             .expect("submission queue is full");
     }
 

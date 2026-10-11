@@ -32,7 +32,6 @@ pub fn test_async_cancel_user_data<S: squeue::EntryMarker, C: cqueue::EntryMarke
         unsafe {
             ring.submission()
                 .push(|e| *e = S::from(sqe.clone()))
-                .ok()
                 .expect("queue is full");
         }
     }
@@ -86,7 +85,6 @@ pub fn test_async_cancel_user_data_all<S: squeue::EntryMarker, C: cqueue::EntryM
         unsafe {
             ring.submission()
                 .push(|e| *e = S::from(sqe.clone()))
-                .ok()
                 .expect("queue is full");
         }
     }
@@ -142,7 +140,6 @@ pub fn test_async_cancel_any<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         unsafe {
             ring.submission()
                 .push(|e| *e = S::from(sqe.clone()))
-                .ok()
                 .expect("queue is full");
         }
     }
@@ -194,7 +191,6 @@ pub fn test_async_cancel_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         unsafe {
             ring.submission()
                 .push(|e| *e = S::from(sqe.clone()))
-                .ok()
                 .expect("queue is full");
         }
     }
@@ -249,7 +245,6 @@ pub fn test_async_cancel_fd_all<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         unsafe {
             ring.submission()
                 .push(|e| *e = S::from(sqe.clone()))
-                .ok()
                 .expect("queue is full");
         }
     }

@@ -62,7 +62,6 @@ pub fn test_register_sync_cancel<S: squeue::EntryMarker, C: cqueue::EntryMarker>
                             .user_data(USER_DATA_4);
                     }
                 })
-                .ok()
                 .expect("queue is full");
         }
         nr_submitted += ring.submit()?;
@@ -150,7 +149,6 @@ pub fn test_register_sync_cancel_any<S: squeue::EntryMarker, C: cqueue::EntryMar
                     opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
                         .user_data(START_USER_DATA + i);
                 })
-                .ok()
                 .expect("queue is full");
         }
     }
@@ -205,7 +203,6 @@ pub fn test_register_sync_cancel_unsubmitted<S: squeue::EntryMarker, C: cqueue::
                 opcode::Read::new(entry, types::Fd(fd_1.as_raw_fd()), buf.as_mut_ptr(), 32)
                     .user_data(USER_DATA);
             })
-            .ok()
             .expect("queue is full");
     }
 

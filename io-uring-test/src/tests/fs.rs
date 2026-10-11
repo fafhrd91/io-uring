@@ -57,14 +57,12 @@ pub fn test_file_write_stream<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -95,14 +93,12 @@ pub fn test_file_write_stream<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x03)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x04);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -163,7 +159,6 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::ReadMulti::new(entry, types::Fd(rx.as_raw_fd()), 0, 0xcafe)
                     .user_data(REQ_TYPE_READ);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -181,7 +176,6 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .user_data(REQ_TYPE_WRITE_BYTES0)
                 .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(2)?;
@@ -230,7 +224,6 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .user_data(REQ_TYPE_WRITE_BYTES1)
                 .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(2)?;
@@ -280,7 +273,6 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .sqe_flags(squeue::Flags::IO_LINK)
                 .user_data(REQ_TYPE_WRITE_BYTES0);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
@@ -293,7 +285,6 @@ pub fn test_pipe_read_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .sqe_flags(squeue::Flags::IO_LINK)
                 .user_data(REQ_TYPE_WRITE_BYTES1);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(4)?;
@@ -448,7 +439,6 @@ pub fn test_pipe_fixed_writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
                 )
                 .user_data(REQ_TYPE_WRITEV_FIXED);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -481,7 +471,6 @@ pub fn test_pipe_fixed_writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
                 )
                 .user_data(REQ_TYPE_READV_FIXED);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -521,7 +510,6 @@ pub fn test_file_fsync<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Fsync::new(entry, fd).user_data(0x03);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -562,7 +550,6 @@ pub fn test_file_fsync_file_range<S: squeue::EntryMarker, C: cqueue::EntryMarker
                     .offset(3 * 1024)
                     .user_data(0x04);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -604,7 +591,6 @@ pub fn test_file_fsync_range<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .len(1024)
                     .user_data(0x14);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -638,7 +624,6 @@ pub fn test_file_fallocate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Fallocate::new(entry, fd, 1024).user_data(0x10);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -679,7 +664,6 @@ pub fn test_file_openat2<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::OpenAt2::new(entry, dirfd, path.as_ptr(), &openhow).user_data(0x11);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -741,7 +725,6 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
                         .file_index(Some(file_index))
                         .user_data(0x11);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -765,7 +748,6 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
                 .push(|entry| {
                     opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -802,7 +784,6 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
                         .file_index(Some(file_index))
                         .user_data(0x11);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -826,7 +807,6 @@ pub fn test_file_openat2_close_file_index<S: squeue::EntryMarker, C: cqueue::Ent
                 .push(|entry| {
                     opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -886,7 +866,6 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
                         .file_index(Some(file_index))
                         .user_data(0x11);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -910,7 +889,6 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
                 .push(|entry| {
                     opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -945,7 +923,6 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
                         .file_index(Some(file_index))
                         .user_data(0x11);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -969,7 +946,6 @@ pub fn test_file_openat_close_file_index<S: squeue::EntryMarker, C: cqueue::Entr
                 .push(|entry| {
                     opcode::Close::new(entry, types::Fixed(round)).user_data(0x12);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -1006,7 +982,6 @@ pub fn test_file_close<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Close::new(entry, fd).user_data(0x12);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1047,7 +1022,6 @@ pub fn test_file_cur_pos<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .offset(u64::MAX)
                     .user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1060,7 +1034,6 @@ pub fn test_file_cur_pos<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .offset(u64::MAX)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1072,7 +1045,6 @@ pub fn test_file_cur_pos<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x03);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1124,7 +1096,6 @@ pub fn test_statx<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .mask(libc::STATX_ALL)
                 .user_data(0x99);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1168,7 +1139,6 @@ pub fn test_statx<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .mask(libc::STATX_ALL)
                 .user_data(0x9a);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1222,7 +1192,6 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
             .push(|entry| {
                 opcode::Write::new(entry, fd, input.0.as_ptr(), input.0.len() as _).user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1234,7 +1203,6 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
                 opcode::Read::new(entry, fd, output.0.as_mut_ptr(), output.0.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1262,7 +1230,6 @@ pub fn test_file_direct_write_read<S: squeue::EntryMarker, C: cqueue::EntryMarke
                 opcode::Read::new(entry, fd, buf[1..].as_mut_ptr(), buf[1..].len() as _)
                     .user_data(0x03);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1322,7 +1289,6 @@ pub fn test_file_splice<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(0x33);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1368,7 +1334,6 @@ pub fn test_ftruncate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Ftruncate::new(entry, fd, 512).user_data(0x33);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1389,7 +1354,6 @@ pub fn test_ftruncate<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Ftruncate::new(entry, fd, 0).user_data(0x34);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1441,7 +1405,6 @@ pub fn test_fixed_fd_install<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::Read::new(entry, fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1457,7 +1420,6 @@ pub fn test_fixed_fd_install<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::FixedFdInstall::new(entry, fd, 0).user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1512,7 +1474,6 @@ pub fn test_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .flags(0)
                 .user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1536,7 +1497,6 @@ pub fn test_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1586,7 +1546,6 @@ pub fn test_f_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .flags(0)
                 .user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1610,7 +1569,6 @@ pub fn test_f_get_set_xattr<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 

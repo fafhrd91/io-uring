@@ -26,7 +26,6 @@ pub fn test_waitid<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         sq.push(|entry| {
             opcode::WaitId::new(entry, libc::P_PID, child_id, libc::WEXITED).user_data(0x110);
         })
-        .ok()
         .expect("queue is full");
     }
 

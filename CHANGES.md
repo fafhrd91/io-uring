@@ -7,8 +7,9 @@
   is removed. Entries can be reused for another operation
 
 * `SubmissionQueue::push()` takes a closure that initializes the queue slot
-  in place with an opcode. `push_multiple()`, `push_unchecked()`, `try_push_inline()`
-  and `PushError` are removed, `has_space()` takes no arguments
+  in place with an opcode. If the queue is full it returns `PushError<F>`,
+  which holds the closure. `push_multiple()`, `push_unchecked()` and
+  `try_push_inline()` are removed, `has_space()` takes no arguments
 
 * `EntryMarker` requires `AsMut<Entry>`
 

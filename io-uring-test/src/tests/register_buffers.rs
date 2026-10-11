@@ -122,7 +122,6 @@ fn _test_register_buffers<
                         .offset((index * BUF_SIZE) as u64)
                         .user_data(index as u64);
                 })
-                .ok()
                 .unwrap();
         }
     });
@@ -162,7 +161,6 @@ fn _test_register_buffers<
                         .offset((index * BUF_SIZE) as u64)
                         .user_data(index as u64);
                 })
-                .ok()
                 .unwrap();
         }
     });
@@ -235,7 +233,6 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
     unsafe {
         ring.submission()
             .push(|e: &mut S| *e = S::from(timeout_sqe.clone()))
-            .ok()
             .unwrap()
     };
 
@@ -252,7 +249,6 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
         unsafe {
             ring.submission()
                 .push(|e: &mut S| *e = S::from(read_sqe.clone()))
-                .ok()
                 .unwrap()
         };
 
@@ -279,7 +275,6 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
         // Push a timeout of 50ms
         ring.submission()
             .push(|e: &mut S| *e = S::from(timeout_sqe.clone()))
-            .ok()
             .unwrap();
     }
 
@@ -312,7 +307,6 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
         unsafe {
             ring.submission()
                 .push(|e: &mut S| *e = S::from(read_sqe.clone()))
-                .ok()
                 .unwrap();
         }
 
@@ -421,7 +415,6 @@ pub fn test_register_buffers_clone(test: &Test) -> anyhow::Result<()> {
             .push(|entry| {
                 WriteFixed::new(entry, fd, buf_ptr, BUF_SIZE as u32, 0).user_data(1);
             })
-            .ok()
             .expect("queue is full")
     };
     assert_eq!(dst_ring.submit_and_wait(1)?, 1);
@@ -441,7 +434,6 @@ pub fn test_register_buffers_clone(test: &Test) -> anyhow::Result<()> {
             .push(|entry| {
                 ReadFixed::new(entry, fd, buf_ptr, BUF_SIZE as u32, 0).user_data(2);
             })
-            .ok()
             .expect("queue is full")
     };
     assert_eq!(dst_ring.submit_and_wait(1)?, 1);

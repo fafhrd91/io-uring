@@ -561,7 +561,6 @@ where
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
     }
     assert_eq!(ring.submit_and_wait(1)?, 1);
@@ -595,7 +594,6 @@ where
                     .buffer_select(bgid)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
     assert_eq!(ring.submit_and_wait(1)?, 1);

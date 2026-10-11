@@ -96,14 +96,12 @@ pub fn test_tcp_send_recv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -163,7 +161,6 @@ pub fn test_tcp_send_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::SendBundle::new(entry, send_fd, 0xdead).user_data(0x01);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -215,14 +212,12 @@ pub fn test_tcp_zero_copy_send_recv<S: squeue::EntryMarker, C: cqueue::EntryMark
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -302,14 +297,12 @@ pub fn test_tcp_zero_copy_send_fixed<S: squeue::EntryMarker, C: cqueue::EntryMar
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -404,13 +397,11 @@ pub fn test_tcp_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::RecvMsg::new(entry, recv_fd, recvmsg_ptr).user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -491,13 +482,11 @@ pub fn test_tcp_zero_copy_sendmsg_recvmsg<S: squeue::EntryMarker, C: cqueue::Ent
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::RecvMsg::new(entry, recv_fd, recvmsg_ptr).user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -555,7 +544,6 @@ pub fn test_tcp_accept<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Accept::new(entry, fd, &mut sockaddr, &mut addrlen).user_data(0x0e);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -612,7 +600,6 @@ pub fn test_tcp_accept_file_index<S: squeue::EntryMarker, C: cqueue::EntryMarker
                     .file_index(Some(dest_slot))
                     .user_data(0x0e);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -661,7 +648,6 @@ pub fn test_tcp_accept_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::AcceptMulti::new(entry, fd).user_data(2002);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -689,7 +675,6 @@ pub fn test_tcp_accept_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::AsyncCancel::new(entry, 2002).user_data(2003);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -749,7 +734,6 @@ pub fn test_tcp_accept_multi_file_index<S: squeue::EntryMarker, C: cqueue::Entry
                     .allocate_file_index(true)
                     .user_data(2002);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -774,7 +758,6 @@ pub fn test_tcp_accept_multi_file_index<S: squeue::EntryMarker, C: cqueue::Entry
             .push(|entry| {
                 opcode::AsyncCancel::new(entry, 2002).user_data(2003);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -835,7 +818,6 @@ pub fn test_tcp_connect<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(0x0f);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -883,7 +865,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 1, 0xdead, 0)
                     .user_data(0x21);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -904,7 +885,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .buffer_select(0xdead)
                     .user_data(0x22);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -924,7 +904,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .buffer_select(0xdead)
                     .user_data(0x23);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -943,7 +922,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 2, 0xdeae, 0)
                     .user_data(0x24);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -961,7 +939,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .buffer_select(0xdeae)
                     .user_data(0x25);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -985,7 +962,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::RemoveBuffers::new(entry, 1, 0xdeae).user_data(0x26);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1001,7 +977,6 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::RemoveBuffers::new(entry, 1, 0xdeaf).user_data(0x27);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1046,7 +1021,6 @@ pub fn test_tcp_buffer_select_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMa
                 opcode::ProvideBuffers::new(entry, buf.as_mut_ptr(), 1024, 2, BGID, INPUT_BID)
                     .user_data(0x26);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1077,7 +1051,6 @@ pub fn test_tcp_buffer_select_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMa
                     .buffer_select(BGID)
                     .user_data(0x27);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1140,7 +1113,6 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
                 opcode::ProvideBuffers::new(entry, buf.as_mut_ptr(), 512, 1, BGID, INPUT_BID)
                     .user_data(0x29);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1169,7 +1141,6 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
                     .buffer_select(BGID)
                     .user_data(0x2a);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1221,7 +1192,6 @@ pub fn test_tcp_recv_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::ProvideBuffers::new(entry, bufs.as_mut_ptr(), 1024, 2, 0xdead, 0)
                     .user_data(0x21);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1243,7 +1213,6 @@ pub fn test_tcp_recv_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .len(640) // (1024 + 256) / 2 = 640
                     .user_data(0x22);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1315,7 +1284,6 @@ pub fn test_tcp_recv_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .push(|entry| {
                     opcode::RecvBundle::new(entry, recv_fd, 0xdeff).user_data(0x30);
                 })
-                .ok()
                 .expect("queue is full");
         }
 
@@ -1388,7 +1356,6 @@ pub fn test_tcp_recv_multi_bundle<S: squeue::EntryMarker, C: cqueue::EntryMarker
             .push(|entry| {
                 opcode::RecvMultiBundle::new(entry, recv_fd, 0xdebf).user_data(0x31);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1479,7 +1446,6 @@ pub fn test_tcp_shutdown<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Shutdown::new(entry, sock_fd, SHUT_WR).user_data(0x28);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1498,7 +1464,6 @@ pub fn test_tcp_shutdown<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Write::new(entry, sock_fd, text.as_ptr(), text.len() as _);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -1541,7 +1506,6 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(42);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1586,7 +1550,6 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     )
                     .user_data(1234);
                 })
-                .ok()
                 .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
@@ -1632,7 +1595,6 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .file_index(Some(dest_slot))
                 .user_data(55);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1680,7 +1642,6 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(42);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1708,7 +1669,6 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     )
                     .user_data(2345);
                 })
-                .ok()
                 .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
@@ -1741,7 +1701,6 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     )
                     .user_data(3456);
                 })
-                .ok()
                 .expect("queue is full");
         }
         ring.submit_and_wait(1)?;
@@ -1782,7 +1741,6 @@ pub fn test_socket_bind_listen<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 .file_index(Some(dest_slot))
                 .user_data(55);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -1838,7 +1796,6 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
                     )
                     .user_data(11);
                 })
-                .ok()
                 .expect("queue is full")
         };
         ring.submitter().submit_and_wait(1)?;
@@ -1862,7 +1819,6 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
             .push(|entry| {
                 opcode::RecvMsgMulti::new(entry, recvmsg_fd, msghdr_ptr, BUF_GROUP).user_data(77);
             })
-            .ok()
             .expect("queue is full")
     };
     ring.submitter().submit().unwrap();
@@ -1891,7 +1847,6 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
             .push(|entry| {
                 opcode::SendMsg::new(entry, send_fd, msghdr1_ptr).user_data(55);
             })
-            .ok()
             .expect("queue is full")
     };
     ring.submitter().submit().unwrap();
@@ -1909,7 +1864,6 @@ pub fn test_udp_recvmsg_multishot<S: squeue::EntryMarker, C: cqueue::EntryMarker
             .push(|entry| {
                 opcode::SendMsgZc::new(entry, send_fd, msghdr2_ptr).user_data(66);
             })
-            .ok()
             .expect("queue is full")
     };
     ring.submitter().submit().unwrap();
@@ -2009,7 +1963,6 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
                     )
                     .user_data(11);
                 })
-                .ok()
                 .expect("queue is full")
         };
         ring.submitter().submit_and_wait(1)?;
@@ -2034,7 +1987,6 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
                     .flags(libc::MSG_TRUNC as u32)
                     .user_data(77);
             })
-            .ok()
             .expect("queue is full")
     };
     ring.submitter().submit().unwrap();
@@ -2056,7 +2008,6 @@ pub fn test_udp_recvmsg_multishot_trunc<S: squeue::EntryMarker, C: cqueue::Entry
                 .push(|entry| {
                     opcode::SendMsg::new(entry, send_fd, msghdr1_ptr).user_data(55);
                 })
-                .ok()
                 .expect("queue is full")
         };
     }
@@ -2151,7 +2102,6 @@ pub fn test_udp_send_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Recv::new(entry, fd, in_ptr, in_len).user_data(1);
             })
-            .ok()
             .expect("queue is full");
 
         // For the first send, we don't specify a destination address. This should
@@ -2160,7 +2110,6 @@ pub fn test_udp_send_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Send::new(entry, fd, out_buf.as_ptr(), out_buf.len() as u32).user_data(2);
             })
-            .ok()
             .expect("queue is full");
 
         // For the second send, we do specify the destination address, and we should
@@ -2172,7 +2121,6 @@ pub fn test_udp_send_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .dest_addr_len(addr.len())
                     .user_data(3);
             })
-            .ok()
             .expect("queue is full");
     };
     ring.submitter().submit_and_wait(3)?;
@@ -2242,7 +2190,6 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
                     )
                     .user_data(11);
                 })
-                .ok()
                 .expect("queue is full")
         };
         ring.submitter().submit_and_wait(1)?;
@@ -2259,7 +2206,6 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
             .push(|entry| {
                 opcode::RecvMulti::new(entry, recvmsg_fd, BUF_GROUP).user_data(3);
             })
-            .ok()
             .expect("queue is full")
     };
     ring.submitter().submit()?;
@@ -2279,7 +2225,6 @@ pub fn test_udp_sendzc_with_dest<S: squeue::EntryMarker, C: cqueue::EntryMarker>
                     .user_data(33)
                     .sqe_flags(Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -2521,7 +2466,6 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
                 opcode::Accept::new(entry, accept_fd, ptr::null_mut(), ptr::null_mut())
                     .user_data(REQ_TYPE_ACCEPT);
             })
-            .ok()
             .expect("queue is full")
     };
 
@@ -2564,7 +2508,6 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
                         .ifq(zcrx_id)
                         .user_data(REQ_TYPE_RX);
                 })
-                .ok()
                 .expect("queue is full")
         };
     }

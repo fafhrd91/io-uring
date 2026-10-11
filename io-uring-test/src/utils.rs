@@ -69,14 +69,12 @@ pub fn write_read<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
                 opcode::Read::new(entry, fd_out, output.as_mut_ptr(), output.len() as _)
                     .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -116,7 +114,6 @@ pub fn writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .user_data(0x01)
                     .sqe_flags(squeue::Flags::IO_LINK);
             })
-            .ok()
             .expect("queue is full");
         queue
             .push(|entry| {
@@ -128,7 +125,6 @@ pub fn writev_readv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(0x02);
             })
-            .ok()
             .expect("queue is full");
     }
 

@@ -63,7 +63,6 @@ pub fn test_futex_wait<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(USER_DATA);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -130,7 +129,6 @@ pub fn test_futex_wake<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 )
                 .user_data(USER_DATA);
             })
-            .ok()
             .expect("queue is full");
     }
     ring.submit_and_wait(1)?;
@@ -176,7 +174,6 @@ pub fn test_futex_waitv<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::FutexWaitV::new(entry, waitv.as_ptr().cast(), waitv.len() as _)
                     .user_data(USER_DATA);
             })
-            .ok()
             .expect("queue is full");
     }
 

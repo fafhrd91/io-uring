@@ -34,7 +34,6 @@ pub fn test_eventfd_poll<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
                     .user_data(0x04);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -85,7 +84,6 @@ pub fn test_eventfd_poll_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                 opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
                     .user_data(0x05);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -99,7 +97,6 @@ pub fn test_eventfd_poll_remove<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::PollRemove::new(entry, 0x05).user_data(0x06);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -153,7 +150,6 @@ pub fn test_eventfd_poll_remove_failed<S: squeue::EntryMarker, C: cqueue::EntryM
                 opcode::PollAdd::new(entry, types::Fd(fd.as_raw_fd()), libc::POLLIN as _)
                     .user_data(0x07);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -169,7 +165,6 @@ pub fn test_eventfd_poll_remove_failed<S: squeue::EntryMarker, C: cqueue::EntryM
             .push(|entry| {
                 opcode::PollRemove::new(entry, 0x08).user_data(0x08);
             })
-            .ok()
             .expect("queue is full");
     }
 
@@ -217,7 +212,6 @@ pub fn test_eventfd_poll_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
                     .multi(true)
                     .user_data(0x04);
             })
-            .ok()
             .expect("queue is full");
     }
 

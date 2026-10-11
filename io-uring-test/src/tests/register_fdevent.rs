@@ -34,7 +34,6 @@ fn submit_nop<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
             .push(|entry| {
                 opcode::Nop::new(entry);
             })
-            .ok()
             .expect("queue is full");
     }
 

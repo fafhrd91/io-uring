@@ -389,7 +389,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     ///
     /// The entry passed to `f` may hold a previously submitted entry, `f` must initialize it
     /// with an [`opcode`](crate::opcode) `new`, which resets the entry.
-    /// If the queue is full, `f` is returned without being called, so the caller can
+    /// If the queue is full, `f` is returned in a [`PushError`] without being called, so the caller can
     /// initialize the entry elsewhere without checking for space beforehand.
     ///
     /// # Safety
@@ -406,7 +406,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// or overrun the queue. Debug builds panic on such a nested push.
     #[inline]
     #[track_caller]
-    pub unsafe fn push<F>(&self, f: F) -> Result<(), F>
+    pub unsafe fn push<F>(&self, f: F) -> Result<(), PushError<F>>
     where
         F: FnOnce(&mut E),
     {
@@ -428,10 +428,38 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
                 .set(self.queue.local_tail.get().wrapping_add(1));
             Ok(())
         } else {
-            Err(f)
+            Err(PushError(f))
         }
     }
 }
+
+/// An error returned by [`SubmissionQueue::push`] when the queue is full.
+///
+/// It holds the closure passed to `push`, which can be recovered from the field or
+/// with [`into_inner`](Self::into_inner).
+pub struct PushError<F>(pub F);
+
+impl<F> PushError<F> {
+    /// Returns the closure that was passed to [`SubmissionQueue::push`].
+    #[inline]
+    pub fn into_inner(self) -> F {
+        self.0
+    }
+}
+
+impl<F> Debug for PushError<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PushError").finish_non_exhaustive()
+    }
+}
+
+impl<F> fmt::Display for PushError<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("submission queue is full")
+    }
+}
+
+impl<F> std::error::Error for PushError<F> {}
 
 impl Entry {
     /// Set the submission event's [flags](Flags).
@@ -690,7 +718,8 @@ mod push_tests {
                 .push(|e| {
                     opcode::Nop::new(e).user_data(7);
                 })
-                .unwrap_err();
+                .unwrap_err()
+                .into_inner();
             assert!(sq.is_full());
 
             // submission publishes the tail of the unsynced queue
