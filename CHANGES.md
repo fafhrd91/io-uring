@@ -97,6 +97,9 @@
 * `Submitter::submit*()` compute the pending count from the local SQ tail instead of
   reloading the shared tail
 
+* `Submitter::submit()` and `submit_with_args(0, ..)` skip `io_uring_enter` if the
+  queue is empty and there is no task work or CQ overflow to flush
+
 * Add `opcode2::Writev` with `offset()` support
 
 * Add `register_napi()`, `register_ring_fd()`, `register_buffers_clone()`,

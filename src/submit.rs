@@ -162,6 +162,9 @@ impl<'a> Submitter<'a> {
     }
 
     /// Submit all queued submission queue events to the kernel.
+    ///
+    /// No syscall is made if the queue is empty and there is no pending task work
+    /// or CQ overflow to flush.
     #[inline]
     pub fn submit(&self) -> io::Result<usize> {
         self.submit_and_wait(0)
@@ -198,8 +201,9 @@ impl<'a> Submitter<'a> {
 
     /// Flush the submission queue and compute the `io_uring_enter` flags.
     ///
-    /// Returns the number of pending entries and the flags, or `None` if no syscall is needed
-    /// because the SQPOLL thread is awake and will pick the entries up.
+    /// Returns the number of pending entries and the flags, or `None` if no syscall is needed:
+    /// there is nothing to submit or reap, or the SQPOLL thread is awake and will pick the
+    /// entries up.
     #[inline]
     fn prepare_submit(&self, want: usize, mut flags: EnterFlags) -> (usize, Option<EnterFlags>) {
         let len = self.flush_sq();
@@ -220,6 +224,11 @@ impl<'a> Submitter<'a> {
         // Deferred task work is only run by an enter carrying GETEVENTS.
         if want > 0 || self.params.is_setup_iopoll() || sq_cq_overflow || sq_taskrun {
             flags.insert(EnterFlags::GETEVENTS);
+        }
+
+        // Nothing to submit and nothing to reap, the syscall would be a no-op.
+        if len == 0 && !flags.contains(EnterFlags::GETEVENTS) {
+            return (0, None);
         }
 
         if self.params.is_setup_sqpoll() {
