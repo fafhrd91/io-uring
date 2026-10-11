@@ -92,6 +92,8 @@
 
 * Optimize submission queue push path, avoid redundant tail stores and syncs
 
+* `CompletionQueue::sync()` and drop skip the head store if no entries were consumed
+
 * Add `opcode2::Writev` with `offset()` support
 
 * Add `register_napi()`, `register_ring_fd()`, `register_buffers_clone()`,

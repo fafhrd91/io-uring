@@ -24,6 +24,8 @@ pub(crate) struct Inner<E: EntryMarker> {
 pub struct CompletionQueue<'a, E: EntryMarker = Entry> {
     head: u32,
     tail: u32,
+    // last head value stored to the ring
+    published: u32,
     queue: &'a Inner<E>,
 }
 
@@ -152,9 +154,11 @@ impl<E: EntryMarker> Inner<E> {
 
     #[inline]
     pub(crate) unsafe fn borrow_shared(&self) -> CompletionQueue<'_, E> {
+        let head = unsync_load(self.head);
         CompletionQueue {
-            head: unsync_load(self.head),
+            head,
             tail: (*self.tail).load(atomic::Ordering::Acquire),
+            published: head,
             queue: self,
         }
     }
@@ -187,9 +191,17 @@ impl<E: EntryMarker> CompletionQueue<'_, E> {
     /// in the queue if the kernel has produced some entries in the meantime.
     #[inline]
     pub fn sync(&mut self) {
-        unsafe {
-            (*self.queue.head).store(self.head, atomic::Ordering::Release);
-            self.tail = (*self.queue.tail).load(atomic::Ordering::Acquire);
+        self.publish_head();
+        self.tail = unsafe { (*self.queue.tail).load(atomic::Ordering::Acquire) };
+    }
+
+    /// Store the consumed head to the ring, the store is skipped if nothing was consumed, so
+    /// the cache line shared with the kernel is not dirtied.
+    #[inline]
+    fn publish_head(&mut self) {
+        if self.head != self.published {
+            unsafe { (*self.queue.head).store(self.head, atomic::Ordering::Release) };
+            self.published = self.head;
         }
     }
 
@@ -284,7 +296,7 @@ impl<E: EntryMarker> CompletionQueue<'_, E> {
 impl<E: EntryMarker> Drop for CompletionQueue<'_, E> {
     #[inline]
     fn drop(&mut self) {
-        unsafe { &*self.queue.head }.store(self.head, atomic::Ordering::Release);
+        self.publish_head();
     }
 }
 
