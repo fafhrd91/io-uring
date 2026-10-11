@@ -21,6 +21,13 @@
 
 * sys bindings regenerated from Linux 7.2 uapi headers
 
+* `EpollCtl::new()` takes a regular `epfd`, the kernel doesn't support fixed epoll files
+
+* `Fadvise` and `Madvise` pass lengths larger than `u32` in the 64-bit field
+  instead of truncating them
+
+* `WaitId::infop()` takes `*mut siginfo_t`
+
 * `Submitter::register_ifq()` takes `&mut io_uring_zcrx_ifq_reg`, the kernel writes
   results back into it
 

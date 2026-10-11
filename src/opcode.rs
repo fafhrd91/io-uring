@@ -837,9 +837,15 @@ opcode! {
     /// Predeclare an access pattern for file data, equivalent to `posix_fadvise(2)`.
     pub struct Fadvise = sys::IORING_OP_FADVISE;
 
+    /// Lengths that don't fit in `u32` require Linux 6.7, older kernels
+    /// fail them with `EINVAL`.
     fn new(sqe, fd: impl sealed::UseFixed, len: libc::off_t, advice: i32) {
         assign_fd!(sqe, fd);
-        sqe.len = len as _;
+        if let Ok(len) = u32::try_from(len) {
+            sqe.len = len;
+        } else {
+            sqe.__bindgen_anon_2.addr = len as _;
+        }
         sqe.__bindgen_anon_3.fadvise_advice = advice as _;
     }
 
@@ -853,10 +859,16 @@ opcode! {
     /// Give advice about use of memory, equivalent to `madvise(2)`.
     pub struct Madvise = sys::IORING_OP_MADVISE;
 
+    /// Lengths that don't fit in `u32` require Linux 6.7, older kernels
+    /// fail them with `EINVAL`.
     fn new(sqe, addr: *const libc::c_void, len: libc::off_t, advice: i32) {
         sqe.fd = -1;
         sqe.__bindgen_anon_2.addr = addr as _;
-        sqe.len = len as _;
+        if let Ok(len) = u32::try_from(len) {
+            sqe.len = len;
+        } else {
+            sqe.__bindgen_anon_1.off = len as _;
+        }
         sqe.__bindgen_anon_3.fadvise_advice = advice as _;
     }
 }
@@ -985,16 +997,19 @@ opcode! {
 
 opcode! {
     /// Modify an epoll file descriptor, equivalent to `epoll_ctl(2)`.
+    ///
+    /// The kernel doesn't resolve `epfd` through the fixed file table,
+    /// so it must be a regular file descriptor.
     pub struct EpollCtl = sys::IORING_OP_EPOLL_CTL;
 
     fn new(
         sqe,
-        epfd: impl sealed::UseFixed,
+        epfd: impl sealed::UseFd,
         fd: impl sealed::UseFd,
         op: i32,
         ev: *const types::epoll_event,
     ) {
-        assign_fd!(sqe, epfd);
+        sqe.fd = sealed::UseFd::into(epfd);
         sqe.__bindgen_anon_2.addr = ev as _;
         sqe.len = op as _;
         sqe.__bindgen_anon_1.off = sealed::UseFd::into(fd) as _;
@@ -1706,7 +1721,7 @@ opcode! {
     }
 
     /// Where to store the `siginfo_t` of the child, as in `waitid(2)`.
-    fn infop(sqe, infop: *const libc::siginfo_t) {
+    fn infop(sqe, infop: *mut libc::siginfo_t) {
         sqe.__bindgen_anon_1.addr2 = infop as _;
     }
 
@@ -2000,6 +2015,31 @@ mod tests {
         Recv::new(&mut entry, Fd(5), std::ptr::null_mut(), 0);
         assert_eq!(entry.0.fd, 5);
         assert_eq!(entry.0.flags, 0);
+    }
+
+    #[test]
+    fn advise_len() {
+        let mut entry = Entry::default();
+        Fadvise::new(&mut entry, Fd(3), 4096, libc::POSIX_FADV_DONTNEED).offset(10);
+        assert_eq!(entry.0.len, 4096);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 10);
+
+        Fadvise::new(&mut entry, Fd(3), 1 << 33, libc::POSIX_FADV_DONTNEED).offset(10);
+        assert_eq!(entry.0.len, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 1 << 33);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 10);
+
+        let addr = 0x1000 as *const libc::c_void;
+        Madvise::new(&mut entry, addr, 4096, libc::MADV_DONTNEED);
+        assert_eq!(entry.0.len, 4096);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 0x1000);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 0);
+
+        Madvise::new(&mut entry, addr, 1 << 33, libc::MADV_DONTNEED);
+        assert_eq!(entry.0.len, 0);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_2.addr }, 0x1000);
+        assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 1 << 33);
     }
 
     #[test]
