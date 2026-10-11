@@ -4,7 +4,8 @@
 
 * opcodes initialize the submission entry in place. `X::new(&mut entry, ..)`
   resets the entry and writes required fields, setters update it directly, `build()`
-  is removed. Entries can be reused for another operation
+  is removed. Entries can be reused for another operation. `new` takes
+  `&mut impl squeue::EntryMarker` and resets all 128 bytes of an `Entry128`
 
 * `SubmissionQueue::push()` takes a closure that initializes the queue slot
   in place with an opcode. If the queue is full it returns `PushError<F>`,

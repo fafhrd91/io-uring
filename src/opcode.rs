@@ -20,7 +20,7 @@
 #![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
 use std::{convert::TryInto, mem, os::unix::io::RawFd};
 
-use crate::squeue::{Entry, Entry128, Flags};
+use crate::squeue::{Entry, Entry128, EntryMarker, Flags};
 use crate::{sys, types, types::sealed};
 
 macro_rules! assign_fd {
@@ -63,10 +63,9 @@ macro_rules! opcode_common {
 }
 
 #[inline(always)]
-fn reset_entry(entry: &mut impl AsMut<Entry>) -> &mut sys::io_uring_sqe {
-    let entry = entry.as_mut();
-    *entry = Entry::default();
-    &mut entry.0
+fn reset_entry(entry: &mut impl EntryMarker) -> &mut sys::io_uring_sqe {
+    entry.reset();
+    &mut entry.as_mut().0
 }
 
 #[inline(always)]
@@ -81,7 +80,7 @@ macro_rules! opcode {
         pub struct $name:ident = $code:expr;
         $( $rest:tt )*
     ) => {
-        opcode! { @impl [impl AsMut<Entry>] reset_entry; $( #[$outer] )* $name = $code; $( $rest )* }
+        opcode! { @impl [impl EntryMarker] reset_entry; $( #[$outer] )* $name = $code; $( $rest )* }
     };
     (
         $( #[$outer:meta] )*
@@ -1581,6 +1580,9 @@ opcode! {
 
 opcode! {
     /// A file/device-specific 16-byte command, akin (but not equivalent) to `ioctl(2)`.
+    ///
+    /// On an [`Entry128`] queue the kernel passes an 80-byte command area, the trailing
+    /// 64 bytes are zeroed by `new`.
     pub struct UringCmd16 = sys::IORING_OP_URING_CMD;
 
     fn new(sqe, fd: impl sealed::UseFixed, cmd_op: u32) {
@@ -2735,6 +2737,19 @@ mod tests {
         MsgRingData::new(&mut entry, Fixed(2), 0, 1, None);
         assert_eq!(entry.0.fd, 2);
         assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
+    }
+
+    #[test]
+    fn entry64_ops_reset_entry128_tail() {
+        let mut entry = Entry128(Entry::default(), [0xff; 64]);
+        Nop::new(&mut entry).user_data(1);
+        assert_eq!(entry.get_opcode(), sys::IORING_OP_NOP as u8);
+        assert_eq!(entry.1, [0; 64]);
+
+        entry.1 = [0xff; 64];
+        UringCmd16::new(&mut entry, Fd(1), 2).cmd([3; 16]);
+        assert_eq!(entry.get_opcode(), sys::IORING_OP_URING_CMD as u8);
+        assert_eq!(entry.1, [0; 64]);
     }
 
     #[test]

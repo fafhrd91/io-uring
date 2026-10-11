@@ -38,7 +38,9 @@ impl<'a, E: EntryMarker> Copy for SubmissionQueue<'a, E> {}
 /// A submission queue entry (SQE), representing a request for an I/O operation.
 ///
 /// This is implemented for [`Entry`] and [`Entry128`].
-pub trait EntryMarker: Clone + Debug + From<Entry> + AsMut<Entry> + private::Sealed {
+pub trait EntryMarker:
+    Clone + Debug + From<Entry> + AsMut<Entry> + private::Sealed + private::SqeReset
+{
     /// `IORING_SETUP_*` flags required by this entry type when building the ring.
     const BUILD_FLAGS: u32;
 
@@ -429,9 +431,6 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
     ///
     /// `f` must initialize the entry with an opcode, otherwise the stale entry is resubmitted.
-    /// For [`Entry128`] queues, opcodes other than [`UringCmd80`](crate::opcode::UringCmd80),
-    /// [`UringCmd128`](crate::opcode::UringCmd128) and [`Nop128`](crate::opcode::Nop128)
-    /// reset only the first 64 bytes.
     ///
     /// `f` must not push to this submission queue. The entry is not reserved until `f` returns,
     /// so a nested push would alias the entry being initialized and could submit a stale entry
@@ -635,6 +634,13 @@ impl Default for Entry {
 
 impl private::Sealed for Entry {}
 
+impl private::SqeReset for Entry {
+    #[inline]
+    fn reset(&mut self) {
+        *self = Entry::default();
+    }
+}
+
 impl EntryMarker for Entry {
     const BUILD_FLAGS: u32 = 0;
 
@@ -720,6 +726,13 @@ impl Entry128 {
 }
 
 impl private::Sealed for Entry128 {}
+
+impl private::SqeReset for Entry128 {
+    #[inline]
+    fn reset(&mut self) {
+        *self = Entry128(Entry::default(), [0; 64]);
+    }
+}
 
 impl EntryMarker for Entry128 {
     const BUILD_FLAGS: u32 = sys::IORING_SETUP_SQE128;

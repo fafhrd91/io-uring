@@ -6,6 +6,12 @@ pub(crate) mod private {
     ///
     /// See this [blog](https://jack.wrenn.fyi/blog/private-trait-methods/) for more details.
     pub trait Sealed {}
+
+    /// Resets every byte of a submission queue entry, including the second half of 128-byte
+    /// entries.
+    pub trait SqeReset {
+        fn reset(&mut self);
+    }
 }
 
 /// A region of memory mapped using `mmap(2)`.
