@@ -387,7 +387,8 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
 
     /// Attempts to push an entry into the queue, initializing it in place with `f`.
     ///
-    /// The entry passed to `f` is zeroed, initialize it with an [`opcode`](crate::opcode).
+    /// The entry passed to `f` may hold a previously submitted entry, `f` must initialize it
+    /// with an [`opcode`](crate::opcode) `new`, which resets the entry.
     /// If the queue is full, `f` is returned without being called, so the caller can
     /// initialize the entry elsewhere without checking for space beforehand.
     ///
@@ -395,6 +396,10 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     ///
     /// Developers must ensure that parameters of the entry (such as buffer) are valid and will
     /// be valid for the entire duration of the operation, otherwise it may cause memory problems.
+    ///
+    /// `f` must initialize the entry with an opcode, otherwise the stale entry is resubmitted.
+    /// For [`Entry128`] queues, opcodes other than
+    /// [`UringCmd80`](crate::opcode::UringCmd80) reset only the first 64 bytes.
     ///
     /// `f` must not push to this submission queue. The entry is not reserved until `f` returns,
     /// so a nested push would alias the entry being initialized and could submit a stale entry
@@ -417,8 +422,6 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
                 .queue
                 .sqes
                 .add((self.queue.local_tail.get() & self.queue.ring_mask) as usize);
-            // slot may hold an entry already consumed by the kernel
-            entry.write_bytes(0, 1);
             f(&mut *entry);
             self.queue
                 .local_tail

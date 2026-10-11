@@ -3,11 +3,11 @@
 ## [1.0.0] - 2026-10-11
 
 * opcodes initialize the submission entry in place. `X::new(&mut entry, ..)`
-  writes required fields into a zeroed entry, setters update it directly, `build()`
-  is removed
+  resets the entry and writes required fields, setters update it directly, `build()`
+  is removed. Entries can be reused for another operation
 
-* `SubmissionQueue::push()` takes a closure that initializes the zeroed
-  queue slot in place. `push_multiple()`, `push_unchecked()`, `try_push_inline()`
+* `SubmissionQueue::push()` takes a closure that initializes the queue slot
+  in place with an opcode. `push_multiple()`, `push_unchecked()`, `try_push_inline()`
   and `PushError` are removed, `has_space()` takes no arguments
 
 * `EntryMarker` requires `AsMut<Entry>`
@@ -18,6 +18,9 @@
 * `MsgRingSendFd::opcode_flags()` ORs flags like other flag setters
 
 * `squeue::Entry::get_opcode()` returns `u8`
+
+* `Submitter::register_ifq()` takes `&mut io_uring_zcrx_ifq_reg`, the kernel writes
+  results back into it
 
 * Remove deprecated `IoUring::submission_shared()`
 

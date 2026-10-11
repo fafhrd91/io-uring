@@ -234,14 +234,9 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     cq.sync();
 
-    // the whole ring was consumed, reused slots must be zeroed
+    // the whole ring was consumed, `new` must reset the reused slot
     unsafe {
         sq.push(|entry: &mut S| {
-            let bytes = std::slice::from_raw_parts(
-                (entry as *const S).cast::<u8>(),
-                std::mem::size_of::<S>(),
-            );
-            assert!(bytes.iter().all(|b| *b == 0), "reused sqe is not zeroed");
             opcode::Nop::new(entry);
         })
         .ok()
@@ -250,7 +245,9 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     sq.sync();
     assert_eq!(submitter.submit()?, 1);
     cq.sync();
-    assert_eq!(cq.by_ref().count(), 1);
+    let cqes: Vec<C> = cq.by_ref().collect();
+    assert_eq!(cqes.len(), 1);
+    assert_eq!(cqes[0].user_data(), 0, "reused sqe is not reset");
 
     Ok(())
 }
@@ -277,7 +274,6 @@ pub fn test_debug_print<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         }
     }
     println!("Full: {:?}", sq);
-    drop(sq);
 
     ring.submit_and_wait(num_to_sub)?;
 
@@ -329,7 +325,7 @@ pub fn test_msg_ring_data<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(source_cqes[0].result(), 0);
     assert_eq!(source_cqes[0].flags(), 0);
 
-    let dest_cqes: Vec<cqueue::Entry> = dest_ring.completion().map(Into::into).collect();
+    let dest_cqes: Vec<cqueue::Entry> = dest_ring.completion().collect();
     assert_eq!(dest_cqes.len(), 1);
     assert_eq!(dest_cqes[0].user_data(), user_data);
     assert_eq!(dest_cqes[0].result(), result);
@@ -395,7 +391,7 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         assert_eq!(source_cqes[0].result(), 0);
         assert_eq!(source_cqes[0].flags(), 0);
 
-        let dest_cqes: Vec<cqueue::Entry> = temp_ring.completion().map(Into::into).collect();
+        let dest_cqes: Vec<cqueue::Entry> = temp_ring.completion().collect();
         assert_eq!(dest_cqes.len(), 1);
         assert_eq!(dest_cqes[0].user_data(), 22);
         assert_eq!(dest_cqes[0].result(), 0);
@@ -423,7 +419,7 @@ pub fn test_msg_ring_send_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     }
     temp_ring.submit_and_wait(1)?;
     {
-        let source_cqes: Vec<cqueue::Entry> = temp_ring.completion().map(Into::into).collect();
+        let source_cqes: Vec<cqueue::Entry> = temp_ring.completion().collect();
         assert_eq!(source_cqes.len(), 1);
         assert_eq!(source_cqes[0].user_data(), 0);
         assert_eq!(source_cqes[0].result(), 0);

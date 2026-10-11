@@ -2424,7 +2424,7 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     };
 
     // Create test-specific ring as we need special flags for zcrx.
-    let mut ring = ntex_io_uring::IoUring::<S, cqueue::Entry32>::builder()
+    let ring = ntex_io_uring::IoUring::<S, cqueue::Entry32>::builder()
         .setup_defer_taskrun()
         .setup_single_issuer()
         .build(8)?;
@@ -2467,40 +2467,48 @@ pub fn test_tcp_recvzc<S: squeue::EntryMarker>(test: &Test) -> anyhow::Result<()
     let ring_ptr = NonNull::new(ring_ptr).ok_or_else(|| anyhow!("null pointer"))?;
 
     // Create region desc.
-    let mut region_reg = types::io_uring_region_desc::default();
-    region_reg.size = u64::try_from(ring_size)?;
-    region_reg.user_addr = ring_ptr.addr().get() as _;
-    region_reg.flags = types::IORING_MEM_REGION_TYPE_USER;
+    let mut region_reg = types::io_uring_region_desc {
+        size: u64::try_from(ring_size)?,
+        user_addr: ring_ptr.addr().get() as _,
+        flags: types::IORING_MEM_REGION_TYPE_USER,
+        ..Default::default()
+    };
 
     // Create area reg.
-    let mut area_reg = types::io_uring_zcrx_area_reg::default();
-    area_reg.addr = area_ptr.addr().get() as _;
-    area_reg.len = u64::try_from(area_size)?;
+    let mut area_reg = types::io_uring_zcrx_area_reg {
+        addr: area_ptr.addr().get() as _,
+        len: u64::try_from(area_size)?,
+        ..Default::default()
+    };
 
     // Create ifq reg.
-    let mut reg = types::io_uring_zcrx_ifq_reg::default();
-    reg.if_idx = if_idx;
-    reg.if_rxq = if_rxq;
-    reg.rq_entries = rq_entries;
-    reg.area_ptr = ptr::from_mut(&mut area_reg).addr().try_into()?;
-    reg.region_ptr = ptr::from_mut(&mut region_reg).addr().try_into()?;
+    let mut reg = types::io_uring_zcrx_ifq_reg {
+        if_idx,
+        if_rxq,
+        rq_entries,
+        area_ptr: ptr::from_mut(&mut area_reg).addr().try_into()?,
+        region_ptr: ptr::from_mut(&mut region_reg).addr().try_into()?,
+        ..Default::default()
+    };
 
     // Register ifq.
-    ring.submitter().register_ifq(&reg)?;
+    ring.submitter().register_ifq(&mut reg)?;
 
     // Configure the rq.
-    let mut rq_ring = io_uring_zcrx_rq::default();
-    rq_ring.khead = unsafe { ring_ptr.add(usize::try_from(reg.offsets.head)?) }
-        .cast()
-        .as_ptr();
-    rq_ring.ktail = unsafe { ring_ptr.add(usize::try_from(reg.offsets.tail)?) }
-        .cast()
-        .as_ptr();
-    rq_ring.rqes = unsafe { ring_ptr.add(usize::try_from(reg.offsets.rqes)?) }
-        .cast()
-        .as_ptr();
-    rq_ring.rq_tail = 0;
-    rq_ring.ring_entries = reg.rq_entries;
+    let mut rq_ring = io_uring_zcrx_rq {
+        khead: unsafe { ring_ptr.add(usize::try_from(reg.offsets.head)?) }
+            .cast()
+            .as_ptr(),
+        ktail: unsafe { ring_ptr.add(usize::try_from(reg.offsets.tail)?) }
+            .cast()
+            .as_ptr(),
+        rqes: unsafe { ring_ptr.add(usize::try_from(reg.offsets.rqes)?) }
+            .cast()
+            .as_ptr(),
+        rq_tail: 0,
+        ring_entries: reg.rq_entries,
+        ..Default::default()
+    };
 
     let rq_mask = rq_ring.ring_entries - 1;
     let area_token = area_reg.rq_area_token;

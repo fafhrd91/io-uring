@@ -28,7 +28,7 @@ pub fn test_register_buffers<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         test,
         "register_buffers",
         None,
-        |ring, iovecs, _| unsafe { ring.submitter().register_buffers(&iovecs) },
+        |ring, iovecs, _| unsafe { ring.submitter().register_buffers(iovecs) },
     )?;
     _test_register_buffers(
         ring,
@@ -49,7 +49,7 @@ pub fn test_register_buffers<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         },
     )?;
 
-    return Ok(());
+    Ok(())
 }
 
 fn _test_register_buffers<
@@ -247,7 +247,7 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
 
     // Try read the pipe using a sparse buffer
     let cqe = {
-        write.write("yo".as_bytes())?;
+        write.write_all("yo".as_bytes())?;
 
         unsafe {
             ring.submission()
@@ -333,10 +333,10 @@ pub fn test_register_buffers_update<S: squeue::EntryMarker, C: cqueue::EntryMark
 
     // The first two bytes of `buf` should be "yo"
     if &buf[0..2] != "yo".as_bytes() {
-        return Err(anyhow::anyhow!("unexpected read buffer data: {:x?}", &buf));
+        return Err(anyhow::anyhow!("unexpected read buffer data: {:x?}", buf));
     }
 
-    return Ok(());
+    Ok(())
 }
 
 /// Create a pipe and return both ends as RAII `File` handles

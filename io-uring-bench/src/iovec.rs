@@ -115,8 +115,6 @@ fn bench_iovec(c: &mut Criterion) {
                 }
             }
 
-            drop(queue);
-
             ring.submit_and_wait(bufs.len()).unwrap();
             ring.completion().map(black_box).for_each(drop);
         });

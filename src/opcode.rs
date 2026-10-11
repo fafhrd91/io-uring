@@ -3,8 +3,8 @@
 //! Each operation is constructed with `new`, which takes the entry to initialize along with
 //! the operation's required arguments. Optional parameters are written by the setters.
 //!
-//! The entry must be zeroed before `new` is called, entries provided by
-//! [`SubmissionQueue::push`](crate::SubmissionQueue::push) and [`Entry::default`] are.
+//! `new` resets every field of the entry, so an entry can be reused for another operation.
+//! Fields set before `new` are cleared, set them with the operation's setters instead.
 //!
 //! ```
 //! use ntex_io_uring::{opcode, squeue::Entry, types};
@@ -88,12 +88,14 @@ macro_rules! opcode {
 
             #[doc = concat!(
                 "Initialize `entry` as a [`", stringify!($name), "`] operation with its required ",
-                "arguments.\n\nThe entry must be zeroed, see the [module docs](self).",
+                "arguments.\n\nAll fields of `entry` are reset first, see the [module docs](self).",
             )]
             $( #[$new_meta] )*
             #[inline]
             pub fn new(entry: &'a mut impl AsMut<Entry> $(, $arg: $aty )*) -> Self {
-                let $sqe = &mut entry.as_mut().0;
+                let entry = entry.as_mut();
+                *entry = Entry::default();
+                let $sqe = &mut entry.0;
                 $sqe.opcode = Self::CODE;
                 $new_body
                 Self { sqe: $sqe }
@@ -1372,9 +1374,10 @@ impl<'a> UringCmd80<'a> {
 
     /// Initialize `entry` as a [`UringCmd80`] operation with its required arguments.
     ///
-    /// The entry must be zeroed, see the [module docs](self).
+    /// All fields of `entry` are reset first, see the [module docs](self).
     #[inline]
     pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
+        *entry = Entry128(Entry::default(), [0; 64]);
         let Entry128(entry, cmd2) = entry;
         let sqe = &mut entry.0;
         sqe.opcode = Self::CODE;
@@ -2012,6 +2015,36 @@ mod tests {
         assert_eq!(entry.get_user_data(), 42);
         assert_eq!(entry.0.flags, (Flags::IO_LINK | Flags::ASYNC).bits());
         assert_eq!(entry.0.personality, 3);
+    }
+
+    #[test]
+    fn new_resets_entry() {
+        let mut entry = Entry::default();
+        Recv::new(&mut entry, Fixed(3), std::ptr::null_mut(), 4096)
+            .buffer_select(7)
+            .ioprio(sys::IORING_RECVSEND_POLL_FIRST as u16)
+            .personality(2)
+            .user_data(42);
+        Write::new(&mut entry, Fd(5), std::ptr::null(), 0);
+
+        let mut expected = Entry::default();
+        Write::new(&mut expected, Fd(5), std::ptr::null(), 0);
+        assert_eq!(bytes(&entry), bytes(&expected));
+
+        let mut entry = Entry128::from(Entry::default());
+        UringCmd80::new(&mut entry, Fd(1), 1)
+            .cmd([0xff; 80])
+            .user_data(42);
+        UringCmd80::new(&mut entry, Fd(1), 1);
+
+        let mut expected = Entry128::from(Entry::default());
+        UringCmd80::new(&mut expected, Fd(1), 1);
+        assert_eq!(bytes(&entry), bytes(&expected));
+    }
+
+    fn bytes<T>(entry: &T) -> Vec<u8> {
+        let ptr = (entry as *const T).cast::<u8>();
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<T>()) }.to_vec()
     }
 
     #[test]

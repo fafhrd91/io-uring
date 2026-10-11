@@ -909,13 +909,12 @@ impl<'a> Submitter<'a> {
 
     /// Register a netdev hw rx queue for zerocopy.
     ///
+    /// The kernel writes the refill queue offsets, the adjusted `rq_entries` and the zcrx id
+    /// back into `reg`.
+    ///
     /// Available since 6.15.
-    pub fn register_ifq(&self, reg: &sys::io_uring_zcrx_ifq_reg) -> io::Result<()> {
-        self.execute_register(
-            sys::IORING_REGISTER_ZCRX_IFQ,
-            cast_ptr::<sys::io_uring_zcrx_ifq_reg>(reg) as _,
-            1,
-        )
-        .map(drop)
+    pub fn register_ifq(&self, reg: &mut sys::io_uring_zcrx_ifq_reg) -> io::Result<()> {
+        self.execute_register(sys::IORING_REGISTER_ZCRX_IFQ, ptr::from_mut(reg).cast(), 1)
+            .map(drop)
     }
 }
