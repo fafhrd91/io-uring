@@ -94,6 +94,9 @@
 
 * `CompletionQueue::sync()` and drop skip the head store if no entries were consumed
 
+* `Submitter::submit*()` compute the pending count from the local SQ tail instead of
+  reloading the shared tail
+
 * Add `opcode2::Writev` with `offset()` support
 
 * Add `register_napi()`, `register_ring_fd()`, `register_buffers_clone()`,

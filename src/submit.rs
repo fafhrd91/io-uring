@@ -77,18 +77,14 @@ impl<'a> Submitter<'a> {
         }
     }
 
-    /// Publish entries pushed to the submission queue, so they are visible to the kernel.
+    /// Publish entries pushed to the submission queue, so they are visible to the kernel, and
+    /// return the number of entries the kernel has not consumed yet.
     #[inline]
-    fn flush_sq(&self) {
-        unsafe { crate::squeue::publish_tail(self.sq_tail, self.sq_local_tail.get()) }
-    }
-
-    #[inline]
-    fn sq_len(&self) -> usize {
+    fn flush_sq(&self) -> usize {
+        let tail = self.sq_local_tail.get();
         unsafe {
+            crate::squeue::publish_tail(self.sq_tail, tail);
             let head = (*self.sq_head).load(atomic::Ordering::Acquire);
-            let tail = (*self.sq_tail).load(atomic::Ordering::Acquire);
-
             tail.wrapping_sub(head) as usize
         }
     }
@@ -174,8 +170,7 @@ impl<'a> Submitter<'a> {
     /// Submit all queued submission queue events to the kernel and wait for at least `want`
     /// completion events to complete.
     pub fn submit_and_wait(&self, want: usize) -> io::Result<usize> {
-        self.flush_sq();
-        let len = self.sq_len();
+        let len = self.flush_sq();
         let mut flags = EnterFlags::empty();
 
         // This logic suffers from the fact the sq_cq_overflow and sq_need_wakeup
@@ -232,8 +227,7 @@ impl<'a> Submitter<'a> {
         want: usize,
         args: &types::SubmitArgs<'_, '_>,
     ) -> io::Result<usize> {
-        self.flush_sq();
-        let len = self.sq_len();
+        let len = self.flush_sq();
         let mut flags = EnterFlags::EXT_ARG;
 
         let sq_flags = self.load_sq_flags();
