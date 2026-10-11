@@ -7,7 +7,9 @@ use bitflags::bitflags;
 
 use crate::{sys, util::Mmap, util::private, util::unsync_load};
 
-pub(crate) struct Inner<E: EntryMarker> {
+/// Submission queue ring state that does not depend on the entry type, shared with
+/// [`Submitter`](crate::Submitter).
+pub(crate) struct Ring {
     pub(crate) head: *const atomic::AtomicU32,
     pub(crate) tail: *const atomic::AtomicU32,
     pub(crate) flags: *const atomic::AtomicU32,
@@ -15,12 +17,33 @@ pub(crate) struct Inner<E: EntryMarker> {
     pub(crate) ring_entries: usize,
     dropped: *const atomic::AtomicU32,
 
+    pub(crate) local_head: Cell<u32>,
+    pub(crate) local_tail: Cell<u32>,
+}
+
+impl Ring {
+    #[inline]
+    pub(crate) fn sync(&self) {
+        unsafe {
+            publish_tail(self.tail, self.local_tail.get());
+            self.local_head
+                .set((*self.head).load(atomic::Ordering::Acquire));
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sync_cold(&self) {
+        self.sync();
+    }
+}
+
+pub(crate) struct Inner<E: EntryMarker> {
+    pub(crate) ring: Ring,
+
     pub(crate) sqes: *mut E,
     /// The ring was set up with `IORING_SETUP_SQE_MIXED`.
     mixed: bool,
-
-    pub(crate) local_head: Cell<u32>,
-    pub(crate) local_tail: Cell<u32>,
 
     /// Set while a `push` closure runs, to detect re-entrant pushes.
     #[cfg(debug_assertions)]
@@ -232,16 +255,18 @@ impl<E: EntryMarker> Inner<E> {
         let local_tail = Cell::new(unsync_load(tail));
 
         Self {
-            head,
-            tail,
-            ring_mask,
-            ring_entries,
-            flags,
-            dropped,
+            ring: Ring {
+                head,
+                tail,
+                ring_mask,
+                ring_entries,
+                flags,
+                dropped,
+                local_head,
+                local_tail,
+            },
             sqes,
             mixed: p.flags & sys::IORING_SETUP_SQE_MIXED != 0,
-            local_head,
-            local_tail,
             #[cfg(debug_assertions)]
             pushing: Cell::new(false),
         }
@@ -253,21 +278,6 @@ impl<E: EntryMarker> Inner<E> {
     }
 
     #[inline]
-    pub(crate) fn sync(&self) {
-        unsafe {
-            publish_tail(self.tail, self.local_tail.get());
-            self.local_head
-                .set((*self.head).load(atomic::Ordering::Acquire));
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn sync_cold(&self) {
-        self.sync();
-    }
-
-    #[inline]
     #[track_caller]
     fn debug_assert_not_pushing(&self) {
         #[cfg(debug_assertions)]
@@ -275,6 +285,15 @@ impl<E: EntryMarker> Inner<E> {
             !self.pushing.get(),
             "submission queue push from within a `push` closure"
         );
+    }
+}
+
+impl<E: EntryMarker> std::ops::Deref for Inner<E> {
+    type Target = Ring;
+
+    #[inline]
+    fn deref(&self) -> &Ring {
+        &self.ring
     }
 }
 

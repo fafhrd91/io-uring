@@ -1,12 +1,12 @@
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::{cell::Cell, io, mem, ptr, sync::atomic};
+use std::{io, mem, ptr, sync::atomic};
 
 use bitflags::bitflags;
 
 use crate::register::{Probe, RegisterRing, Restriction, execute};
 use crate::types::{CancelBuilder, CloneBuffersFlags, Napi, Timespec};
-use crate::util::{OwnedFd, cast_ptr};
-use crate::{Parameters, sys, types};
+use crate::util::cast_ptr;
+use crate::{Core, squeue, sys, types};
 
 bitflags!(
     /// See man page for complete description:
@@ -45,46 +45,24 @@ bitflags!(
 /// io_uring supports both directly performing I/O on buffers and file descriptors and registering
 /// them beforehand. Registering is slow, but it makes performing the actual I/O much faster.
 pub struct Submitter<'a> {
-    fd: &'a OwnedFd,
-    params: &'a Parameters,
-    enter_ring_fd: &'a Cell<i32>,
-
-    sq_head: *const atomic::AtomicU32,
-    sq_tail: *const atomic::AtomicU32,
-    sq_local_tail: &'a Cell<u32>,
-    sq_flags: *const atomic::AtomicU32,
+    core: &'a Core,
+    sq: &'a squeue::Ring,
 }
 
 impl<'a> Submitter<'a> {
     #[inline]
-    pub(crate) const fn new(
-        fd: &'a OwnedFd,
-        params: &'a Parameters,
-        enter_ring_fd: &'a Cell<i32>,
-        sq_head: *const atomic::AtomicU32,
-        sq_tail: *const atomic::AtomicU32,
-        sq_local_tail: &'a Cell<u32>,
-        sq_flags: *const atomic::AtomicU32,
-    ) -> Submitter<'a> {
-        Submitter {
-            fd,
-            params,
-            enter_ring_fd,
-            sq_head,
-            sq_tail,
-            sq_local_tail,
-            sq_flags,
-        }
+    pub(crate) const fn new(core: &'a Core, sq: &'a squeue::Ring) -> Submitter<'a> {
+        Submitter { core, sq }
     }
 
     /// Publish entries pushed to the submission queue, so they are visible to the kernel, and
     /// return the number of entries the kernel has not consumed yet.
     #[inline]
     fn flush_sq(&self) -> usize {
-        let tail = self.sq_local_tail.get();
+        let tail = self.sq.local_tail.get();
         unsafe {
-            crate::squeue::publish_tail(self.sq_tail, tail);
-            let head = (*self.sq_head).load(atomic::Ordering::Acquire);
+            crate::squeue::publish_tail(self.sq.tail, tail);
+            let head = (*self.sq.head).load(atomic::Ordering::Acquire);
             tail.wrapping_sub(head) as usize
         }
     }
@@ -94,14 +72,14 @@ impl<'a> Submitter<'a> {
     #[inline]
     fn sq_need_wakeup(&self) -> bool {
         unsafe {
-            (*self.sq_flags).load(atomic::Ordering::Relaxed) & sys::IORING_SQ_NEED_WAKEUP != 0
+            (*self.sq.flags).load(atomic::Ordering::Relaxed) & sys::IORING_SQ_NEED_WAKEUP != 0
         }
     }
 
     /// Load flags published by the kernel in the submission queue ring.
     #[inline]
     fn load_sq_flags(&self) -> u32 {
-        unsafe { (*self.sq_flags).load(atomic::Ordering::Acquire) }
+        unsafe { (*self.sq.flags).load(atomic::Ordering::Acquire) }
     }
 
     #[inline]
@@ -116,11 +94,11 @@ impl<'a> Submitter<'a> {
 
     #[inline]
     fn register_ring(&self) -> RegisterRing {
-        let enter_ring_fd = self.enter_ring_fd.get();
-        if enter_ring_fd >= 0 && self.params.is_feature_reg_reg_ring() {
+        let enter_ring_fd = self.core.enter_ring_fd.get();
+        if enter_ring_fd >= 0 && self.core.params.is_feature_reg_reg_ring() {
             RegisterRing::RegisteredIndex(enter_ring_fd)
         } else {
-            RegisterRing::RawFd(self.fd.as_raw_fd())
+            RegisterRing::RawFd(self.core.fd.as_raw_fd())
         }
     }
 
@@ -151,11 +129,11 @@ impl<'a> Submitter<'a> {
         // `enter_ring_fd` holds its index (otherwise `-1`); pass it together with
         // `IORING_ENTER_REGISTERED_RING` instead of the raw file descriptor to avoid the per-call
         // fd lookup in the kernel.
-        let enter_ring_fd = self.enter_ring_fd.get();
+        let enter_ring_fd = self.core.enter_ring_fd.get();
         let (fd, flag) = if enter_ring_fd >= 0 {
             (enter_ring_fd, flag | sys::IORING_ENTER_REGISTERED_RING)
         } else {
-            (self.fd.as_raw_fd(), flag)
+            (self.core.fd.as_raw_fd(), flag)
         };
 
         sys::io_uring_enter(fd, to_submit, min_complete, flag, arg, size).map(|res| res as _)
@@ -219,10 +197,10 @@ impl<'a> Submitter<'a> {
         //
         // Without this, completions remain stuck in kernel's internal buffer
         // after draining CQ, causing missing completion notifications.
-        let need_syscall = (sq_cq_overflow && self.params.is_feature_nodrop()) || sq_taskrun;
+        let need_syscall = (sq_cq_overflow && self.core.params.is_feature_nodrop()) || sq_taskrun;
 
         // Deferred task work is only run by an enter carrying GETEVENTS.
-        if want > 0 || self.params.is_setup_iopoll() || sq_cq_overflow || sq_taskrun {
+        if want > 0 || self.core.params.is_setup_iopoll() || sq_cq_overflow || sq_taskrun {
             flags.insert(EnterFlags::GETEVENTS);
         }
 
@@ -231,7 +209,7 @@ impl<'a> Submitter<'a> {
             return (0, None);
         }
 
-        if self.params.is_setup_sqpoll() {
+        if self.core.params.is_setup_sqpoll() {
             // See discussion in [`SubmissionQueue::need_wakeup`]. The `SeqCst` fence is
             // required before reading IORING_SQ_NEED_WAKEUP, so `sq_flags` above can't be reused.
             atomic::fence(atomic::Ordering::SeqCst);
@@ -411,7 +389,7 @@ impl<'a> Submitter<'a> {
             ..Default::default()
         };
         execute(
-            RegisterRing::RawFd(self.fd.as_raw_fd()),
+            RegisterRing::RawFd(self.core.fd.as_raw_fd()),
             sys::IORING_REGISTER_CLONE_BUFFERS,
             cast_ptr::<sys::io_uring_clone_buffers>(&arg).cast(),
             // This opcode takes a single struct; the kernel requires nr_args == 1.
@@ -651,10 +629,10 @@ impl<'a> Submitter<'a> {
     ///
     /// Available since Linux 5.18.
     pub fn register_ring_fd(&self) -> io::Result<()> {
-        if self.enter_ring_fd.get() >= 0 {
+        if self.core.enter_ring_fd.get() >= 0 {
             return Err(io::Error::from_raw_os_error(libc::EEXIST));
         }
-        let raw_fd = self.fd.as_raw_fd();
+        let raw_fd = self.core.fd.as_raw_fd();
         let mut up = sys::io_uring_rsrc_update {
             offset: u32::MAX,
             resv: 0,
@@ -665,7 +643,7 @@ impl<'a> Submitter<'a> {
             (&mut up as *mut sys::io_uring_rsrc_update).cast(),
             1,
         )?;
-        self.enter_ring_fd.set(up.offset as i32);
+        self.core.enter_ring_fd.set(up.offset as i32);
         Ok(())
     }
 
@@ -676,7 +654,7 @@ impl<'a> Submitter<'a> {
     ///
     /// Available since Linux 5.18.
     pub fn unregister_ring_fd(&self) -> io::Result<()> {
-        let offset = self.enter_ring_fd.get();
+        let offset = self.core.enter_ring_fd.get();
         if offset < 0 {
             return Err(io::Error::from_raw_os_error(libc::EINVAL));
         }
@@ -690,7 +668,7 @@ impl<'a> Submitter<'a> {
             cast_ptr::<sys::io_uring_rsrc_update>(&up).cast(),
             1,
         )?;
-        self.enter_ring_fd.set(-1);
+        self.core.enter_ring_fd.set(-1);
         Ok(())
     }
 
@@ -906,5 +884,15 @@ impl<'a> Submitter<'a> {
     pub fn register_ifq(&self, reg: &mut sys::io_uring_zcrx_ifq_reg) -> io::Result<()> {
         self.execute_register(sys::IORING_REGISTER_ZCRX_IFQ, ptr::from_mut(reg).cast(), 1)
             .map(drop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submitter_size() {
+        assert_eq!(mem::size_of::<Submitter<'_>>(), 2 * mem::size_of::<usize>());
     }
 }

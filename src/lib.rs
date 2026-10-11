@@ -91,10 +91,15 @@ where
 {
     sq: squeue::Inner<S>,
     cq: cqueue::Inner<C>,
+    core: Core,
+    memory: ManuallyDrop<MemoryMap>,
+}
+
+/// Ring state that does not depend on the entry types, shared with [`Submitter`].
+pub(crate) struct Core {
     fd: OwnedFd,
     params: Parameters,
     enter_ring_fd: Cell<i32>,
-    memory: ManuallyDrop<MemoryMap>,
 }
 
 #[allow(dead_code)]
@@ -222,9 +227,11 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         Ok(IoUring {
             sq,
             cq,
-            fd,
-            params: Parameters(p),
-            enter_ring_fd: Cell::new(-1),
+            core: Core {
+                fd,
+                params: Parameters(p),
+                enter_ring_fd: Cell::new(-1),
+            },
             memory: ManuallyDrop::new(mm),
         })
     }
@@ -233,21 +240,13 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// events to the kernel for execution and to register files or buffers with it.
     #[inline]
     pub fn submitter(&self) -> Submitter<'_> {
-        Submitter::new(
-            &self.fd,
-            &self.params,
-            &self.enter_ring_fd,
-            self.sq.head,
-            self.sq.tail,
-            &self.sq.local_tail,
-            self.sq.flags,
-        )
+        Submitter::new(&self.core, &self.sq.ring)
     }
 
     /// Get the parameters that were used to construct this instance.
     #[inline]
     pub fn params(&self) -> &Parameters {
-        &self.params
+        &self.core.params
     }
 
     /// Initiate asynchronous I/O. See [`Submitter::submit`] for more details.
@@ -277,15 +276,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         SubmissionQueue<'_, S>,
         CompletionQueue<'_, C>,
     ) {
-        let submit = Submitter::new(
-            &self.fd,
-            &self.params,
-            &self.enter_ring_fd,
-            self.sq.head,
-            self.sq.tail,
-            &self.sq.local_tail,
-            self.sq.flags,
-        );
+        let submit = Submitter::new(&self.core, &self.sq.ring);
         self.sq.sync();
         (submit, self.sq.borrow(), self.cq.borrow())
     }
@@ -332,7 +323,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Drop for IoUring<S, C> {
     fn drop(&mut self) {
         // A registered ring fd holds a reference to the ring until the thread exits.
-        if self.enter_ring_fd.get() >= 0 {
+        if self.core.enter_ring_fd.get() >= 0 {
             let _ = self.submitter().unregister_ring_fd();
         }
 
@@ -749,13 +740,13 @@ impl std::fmt::Debug for Parameters {
 
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> AsRawFd for IoUring<S, C> {
     fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
+        self.core.fd.as_raw_fd()
     }
 }
 
 #[cfg(feature = "io_safety")]
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> AsFd for IoUring<S, C> {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.fd.as_fd()
+        self.core.fd.as_fd()
     }
 }
