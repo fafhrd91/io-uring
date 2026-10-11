@@ -116,6 +116,28 @@ fn test_user_data() {
     assert_eq!(entry.get_user_data(), 4);
 }
 
+#[test]
+fn test_entry_setters() {
+    let mut entry = Entry::default();
+    crate::opcode::Nop::new(&mut entry);
+    entry.set_flags(Flags::IO_LINK);
+    entry.set_flags(Flags::ASYNC);
+    entry.set_personality(7);
+    assert_eq!(entry.get_flags(), Flags::IO_LINK | Flags::ASYNC);
+    assert_eq!(entry.get_personality(), 7);
+    entry.clear_flags();
+    assert!(entry.get_flags().is_empty());
+
+    let mut entry = Entry128::from(Entry::default());
+    crate::opcode::Nop::new(&mut entry);
+    entry.set_flags(Flags::IO_DRAIN);
+    entry.set_personality(9);
+    assert_eq!(entry.get_flags(), Flags::IO_DRAIN);
+    assert_eq!(entry.get_personality(), 9);
+    entry.clear_flags();
+    assert!(entry.get_flags().is_empty());
+}
+
 bitflags! {
     /// Submission flags
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -462,29 +484,26 @@ impl<F> fmt::Display for PushError<F> {
 impl<F> std::error::Error for PushError<F> {}
 
 impl Entry {
-    /// Set the submission event's [flags](Flags).
+    /// Set the submission event's [flags](Flags). The flags are ORed with any existing flags.
     #[inline]
-    pub fn flags(mut self, flags: Flags) -> Entry {
+    pub fn set_flags(&mut self, flags: Flags) {
         self.0.flags |= flags.bits();
-        self
     }
 
     /// Clear the submission event's [flags](Flags).
     #[inline]
-    pub fn clear_flags(mut self) -> Entry {
+    pub fn clear_flags(&mut self) {
         self.0.flags = 0;
-        self
+    }
+
+    /// Get the submission event's [flags](Flags).
+    #[inline]
+    pub fn get_flags(&self) -> Flags {
+        Flags::from_bits_retain(self.0.flags)
     }
 
     /// Set the user data. This is an application-supplied value that will be passed straight
     /// through into the [completion queue entry](crate::cqueue::Entry::user_data).
-    #[inline]
-    pub fn user_data(mut self, user_data: u64) -> Entry {
-        self.0.user_data = user_data;
-        self
-    }
-
-    /// Set the user_data without consuming the entry.
     #[inline]
     pub fn set_user_data(&mut self, user_data: u64) {
         self.0.user_data = user_data;
@@ -496,17 +515,23 @@ impl Entry {
         self.0.user_data
     }
 
+    /// Set the personality of this event. You can obtain a personality using
+    /// [`Submitter::register_personality`](crate::Submitter::register_personality).
+    #[inline]
+    pub fn set_personality(&mut self, personality: u16) {
+        self.0.personality = personality;
+    }
+
+    /// Get the personality of this event.
+    #[inline]
+    pub fn get_personality(&self) -> u16 {
+        self.0.personality
+    }
+
     /// Get the opcode associated with this entry.
     #[inline]
     pub fn get_opcode(&self) -> u8 {
         self.0.opcode
-    }
-
-    /// Set the personality of this event. You can obtain a personality using
-    /// [`Submitter::register_personality`](crate::Submitter::register_personality).
-    pub fn personality(mut self, personality: u16) -> Entry {
-        self.0.personality = personality;
-        self
     }
 }
 
@@ -558,29 +583,26 @@ impl Debug for Entry {
 }
 
 impl Entry128 {
-    /// Set the submission event's [flags](Flags).
+    /// Set the submission event's [flags](Flags). The flags are ORed with any existing flags.
     #[inline]
-    pub fn flags(mut self, flags: Flags) -> Entry128 {
+    pub fn set_flags(&mut self, flags: Flags) {
         self.0.0.flags |= flags.bits();
-        self
     }
 
     /// Clear the submission event's [flags](Flags).
     #[inline]
-    pub fn clear_flags(mut self) -> Entry128 {
+    pub fn clear_flags(&mut self) {
         self.0.0.flags = 0;
-        self
+    }
+
+    /// Get the submission event's [flags](Flags).
+    #[inline]
+    pub fn get_flags(&self) -> Flags {
+        Flags::from_bits_retain(self.0.0.flags)
     }
 
     /// Set the user data. This is an application-supplied value that will be passed straight
     /// through into the [completion queue entry](crate::cqueue::Entry::user_data).
-    #[inline]
-    pub fn user_data(mut self, user_data: u64) -> Entry128 {
-        self.0.0.user_data = user_data;
-        self
-    }
-
-    /// Set the user data without consuming the entry.
     #[inline]
     pub fn set_user_data(&mut self, user_data: u64) {
         self.0.0.user_data = user_data;
@@ -595,9 +617,14 @@ impl Entry128 {
     /// Set the personality of this event. You can obtain a personality using
     /// [`Submitter::register_personality`](crate::Submitter::register_personality).
     #[inline]
-    pub fn personality(mut self, personality: u16) -> Entry128 {
+    pub fn set_personality(&mut self, personality: u16) {
         self.0.0.personality = personality;
-        self
+    }
+
+    /// Get the personality of this event.
+    #[inline]
+    pub fn get_personality(&self) -> u16 {
+        self.0.0.personality
     }
 
     /// Get the opcode associated with this entry.

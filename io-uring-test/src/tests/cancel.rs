@@ -20,14 +20,14 @@ pub fn test_async_cancel_user_data<S: squeue::EntryMarker, C: cqueue::EntryMarke
 
     let ts = types::Timespec::new().sec(1);
     let mut timeout_e = squeue::Entry::default();
-    opcode::Timeout::new(&mut timeout_e, &ts);
+    opcode::Timeout::new(&mut timeout_e, &ts).user_data(2003);
 
     // Cancel the timeout matching user data
     let builder = CancelBuilder::user_data(2003);
     let mut cancel_e = squeue::Entry::default();
-    opcode::AsyncCancel2::new(&mut cancel_e, builder);
+    opcode::AsyncCancel2::new(&mut cancel_e, builder).user_data(2004);
 
-    let entries = [timeout_e.user_data(2003), cancel_e.user_data(2004)];
+    let entries = [timeout_e, cancel_e];
     for sqe in &entries {
         unsafe {
             ring.submission()
@@ -69,18 +69,14 @@ pub fn test_async_cancel_user_data_all<S: squeue::EntryMarker, C: cqueue::EntryM
 
     let ts = types::Timespec::new().sec(1);
     let mut timeout_e = squeue::Entry::default();
-    opcode::Timeout::new(&mut timeout_e, &ts);
+    opcode::Timeout::new(&mut timeout_e, &ts).user_data(2003);
 
     // Cancel all timeouts matching user data
     let builder = CancelBuilder::user_data(2003).all();
     let mut cancel_e = squeue::Entry::default();
-    opcode::AsyncCancel2::new(&mut cancel_e, builder);
+    opcode::AsyncCancel2::new(&mut cancel_e, builder).user_data(2004);
 
-    let entries = [
-        timeout_e.clone().user_data(2003),
-        timeout_e.user_data(2003),
-        cancel_e.user_data(2004),
-    ];
+    let entries = [timeout_e.clone(), timeout_e, cancel_e];
     for sqe in &entries {
         unsafe {
             ring.submission()
@@ -124,18 +120,16 @@ pub fn test_async_cancel_any<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     let ts = types::Timespec::new().sec(1);
     let mut timeout_e = squeue::Entry::default();
-    opcode::Timeout::new(&mut timeout_e, &ts);
+    opcode::Timeout::new(&mut timeout_e, &ts).user_data(2003);
+    let mut timeout_e2 = timeout_e.clone();
+    timeout_e2.set_user_data(2004);
 
     // Cancel any pending requests
     let builder = CancelBuilder::any();
     let mut cancel_e = squeue::Entry::default();
-    opcode::AsyncCancel2::new(&mut cancel_e, builder);
+    opcode::AsyncCancel2::new(&mut cancel_e, builder).user_data(2005);
 
-    let entries = [
-        timeout_e.clone().user_data(2003),
-        timeout_e.user_data(2004),
-        cancel_e.user_data(2005),
-    ];
+    let entries = [timeout_e, timeout_e2, cancel_e];
     for sqe in &entries {
         unsafe {
             ring.submission()
@@ -179,14 +173,14 @@ pub fn test_async_cancel_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let _fd = create_dummy_fd()?;
     let fd = types::Fd(_fd.as_raw_fd());
     let mut poll_e = squeue::Entry::default();
-    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _);
+    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _).user_data(2003);
 
     // Cancel one poll request matching FD
     let builder = CancelBuilder::fd(fd);
     let mut cancel_e = squeue::Entry::default();
-    opcode::AsyncCancel2::new(&mut cancel_e, builder);
+    opcode::AsyncCancel2::new(&mut cancel_e, builder).user_data(2004);
 
-    let entries = [poll_e.user_data(2003), cancel_e.user_data(2004)];
+    let entries = [poll_e, cancel_e];
     for sqe in &entries {
         unsafe {
             ring.submission()
@@ -229,18 +223,16 @@ pub fn test_async_cancel_fd_all<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     let _fd = create_dummy_fd()?;
     let fd = types::Fd(_fd.as_raw_fd());
     let mut poll_e = squeue::Entry::default();
-    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _);
+    opcode::PollAdd::new(&mut poll_e, fd, libc::POLLIN as _).user_data(2003);
+    let mut poll_e2 = poll_e.clone();
+    poll_e2.set_user_data(2004);
 
     // Cancel all requests matching FD
     let builder = CancelBuilder::fd(fd).all();
     let mut cancel_e = squeue::Entry::default();
-    opcode::AsyncCancel2::new(&mut cancel_e, builder);
+    opcode::AsyncCancel2::new(&mut cancel_e, builder).user_data(2005);
 
-    let entries = [
-        poll_e.clone().user_data(2003),
-        poll_e.user_data(2004),
-        cancel_e.user_data(2005),
-    ];
+    let entries = [poll_e, poll_e2, cancel_e];
     for sqe in &entries {
         unsafe {
             ring.submission()

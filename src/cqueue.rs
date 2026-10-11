@@ -322,7 +322,7 @@ impl Entry {
     }
 
     /// The user data of the request, as set by
-    /// [`Entry::user_data`](crate::squeue::Entry::user_data) on the submission queue event.
+    /// [`Entry::set_user_data`](crate::squeue::Entry::set_user_data) on the submission queue event.
     #[inline]
     pub fn user_data(&self) -> u64 {
         self.0.user_data
@@ -387,7 +387,7 @@ impl Entry32 {
     }
 
     /// The user data of the request, as set by
-    /// [`Entry::user_data`](crate::squeue::Entry::user_data) on the submission queue event.
+    /// [`Entry::set_user_data`](crate::squeue::Entry::set_user_data) on the submission queue event.
     #[inline]
     pub fn user_data(&self) -> u64 {
         self.0.0.user_data

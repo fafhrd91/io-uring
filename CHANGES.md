@@ -20,6 +20,11 @@
 
 * `squeue::Entry::get_opcode()` returns `u8`
 
+* `squeue::Entry` and `Entry128` by-value builders `flags()`, `user_data()` and
+  `personality()` are replaced by in-place `set_flags()`, `set_user_data()` and
+  `set_personality()`, `clear_flags()` takes `&mut self`. Added `get_flags()`
+  and `get_personality()`
+
 * sys bindings regenerated from Linux 7.2 uapi headers
 
 * `EpollCtl::new()` takes a regular `epfd`, the kernel doesn't support fixed epoll files

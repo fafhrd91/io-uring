@@ -543,7 +543,7 @@ impl<'a> Submitter<'a> {
     }
 
     /// Register credentials of the running application with io_uring, and get an id associated with
-    /// these credentials. This ID can then be [passed](crate::squeue::Entry::personality) into
+    /// these credentials. This ID can then be [passed](crate::squeue::Entry::set_personality) into
     /// submission queue entries to issue the request with this process' credentials.
     ///
     /// By default, if [`Parameters::is_feature_cur_personality`] is set then requests will use the
