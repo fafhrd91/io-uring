@@ -80,66 +80,60 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
 
     println!("test register_ring_fd");
 
-    let mut submitter = ring.submitter();
+    let submitter = ring.submitter();
     match submitter.register_ring_fd() {
         Ok(()) => {}
         Err(e) => return Err(anyhow::anyhow!("register_ring_fd failed: {}", e)),
     }
 
-    match submitter.register_ring_fd() {
-        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {}
-        Ok(()) => {
-            return Err(anyhow::anyhow!(
-                "register_ring_fd should not have succeeded twice on the same submitter"
-            ));
-        }
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "register_ring_fd should have failed with EEXIST on the same submitter: {}",
-                e
-            ));
-        }
-    }
-
     let mut probe = ntex_io_uring::Probe::new();
     submitter.register_probe(&mut probe)?;
 
-    let mut other_submitter = ring.submitter();
-    match other_submitter.unregister_ring_fd() {
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {}
-        Ok(()) => {
-            return Err(anyhow::anyhow!(
-                "unregister_ring_fd should be scoped to the registering submitter"
-            ));
-        }
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "unregister_ring_fd should have failed with EINVAL on an unregistered submitter: {}",
-                e
-            ));
-        }
-    }
-    other_submitter.register_ring_fd()?;
+    // The registration belongs to the ring, every submitter observes it.
+    let other_submitter = ring.submitter();
     match other_submitter.register_ring_fd() {
         Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {}
         Ok(()) => {
             return Err(anyhow::anyhow!(
-                "register_ring_fd should not have succeeded twice on another submitter"
+                "register_ring_fd should not have succeeded twice on the same ring"
             ));
         }
         Err(e) => {
             return Err(anyhow::anyhow!(
-                "register_ring_fd should have failed with EEXIST on another submitter: {}",
+                "register_ring_fd should have failed with EEXIST on the same ring: {}",
                 e
             ));
         }
     }
     other_submitter.unregister_ring_fd()?;
+    match submitter.unregister_ring_fd() {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {}
+        Ok(()) => {
+            return Err(anyhow::anyhow!(
+                "unregister_ring_fd should be shared by all submitters of the ring"
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "unregister_ring_fd should have failed with EINVAL on an unregistered ring: {}",
+                e
+            ));
+        }
+    }
 
-    submitter.unregister_ring_fd()?;
+    // Registered through a temporary submitter, used by the submitter from `split`.
+    ring.submitter().register_ring_fd()?;
 
-    let (mut submitter, sq, mut cq) = ring.split();
-    submitter.register_ring_fd()?;
+    let (submitter, sq, mut cq) = ring.split();
+    match submitter.register_ring_fd() {
+        Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {}
+        res => {
+            return Err(anyhow::anyhow!(
+                "register_ring_fd should have failed with EEXIST after registering: {:?}",
+                res
+            ));
+        }
+    }
 
     // Submitting now transparently goes through the registered ring index.
     unsafe {
@@ -188,13 +182,19 @@ pub fn test_register_ring_fd<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     assert_eq!(cqes[0].user_data(), 0x43);
     assert_eq!(cqes[0].result(), 0);
 
+    // Dropping the ring unregisters its fd, the kernel allows only 16 registered rings per thread.
+    for _ in 0..32 {
+        let ring = IoUring::new(2)?;
+        ring.submitter().register_ring_fd()?;
+    }
+
     Ok(())
 }
 
 fn is_register_ring_fd_supported<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
 ) -> anyhow::Result<bool> {
-    let mut submitter = ring.submitter();
+    let submitter = ring.submitter();
 
     match submitter.register_ring_fd() {
         Ok(()) => {

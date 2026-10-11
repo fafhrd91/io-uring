@@ -97,6 +97,10 @@
 * Add `register_napi()`, `register_ring_fd()`, `register_buffers_clone()`,
   `CompletionQueue::status()` and eventfd enable/disable support
 
+* The registered ring fd is stored in `IoUring` and shared by all its `Submitter`s, so
+  `IoUring::submit()` and later `submitter()` calls use it; it is unregistered on drop.
+  `register_ring_fd()` and `unregister_ring_fd()` take `&self`
+
 * Add `setup_no_sqarray()` and `Parameters::is_feature_no_iowait()`
 
 * Add `write_stream` support to write opcodes and range support to `Fsync`

@@ -44,7 +44,7 @@
 //! This approach allows you to provide your own bindings without relying on bindgen or the prebuilt bindings.
 
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::{cmp, io, marker::PhantomData, mem, mem::ManuallyDrop};
+use std::{cell::Cell, cmp, io, marker::PhantomData, mem, mem::ManuallyDrop};
 
 #[cfg(feature = "io_safety")]
 use std::os::unix::io::{AsFd, BorrowedFd};
@@ -93,6 +93,7 @@ where
     cq: cqueue::Inner<C>,
     fd: OwnedFd,
     params: Parameters,
+    enter_ring_fd: Cell<i32>,
     memory: ManuallyDrop<MemoryMap>,
 }
 
@@ -223,6 +224,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
             cq,
             fd,
             params: Parameters(p),
+            enter_ring_fd: Cell::new(-1),
             memory: ManuallyDrop::new(mm),
         })
     }
@@ -234,6 +236,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         Submitter::new(
             &self.fd,
             &self.params,
+            &self.enter_ring_fd,
             self.sq.head,
             self.sq.tail,
             &self.sq.local_tail,
@@ -277,6 +280,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         let submit = Submitter::new(
             &self.fd,
             &self.params,
+            &self.enter_ring_fd,
             self.sq.head,
             self.sq.tail,
             &self.sq.local_tail,
@@ -327,6 +331,11 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
 
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Drop for IoUring<S, C> {
     fn drop(&mut self) {
+        // A registered ring fd holds a reference to the ring until the thread exits.
+        if self.enter_ring_fd.get() >= 0 {
+            let _ = self.submitter().unregister_ring_fd();
+        }
+
         // Ensure that `MemoryMap` is released before `fd`.
         unsafe {
             ManuallyDrop::drop(&mut self.memory);

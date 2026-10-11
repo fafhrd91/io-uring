@@ -47,7 +47,7 @@ bitflags!(
 pub struct Submitter<'a> {
     fd: &'a OwnedFd,
     params: &'a Parameters,
-    enter_ring_fd: i32,
+    enter_ring_fd: &'a Cell<i32>,
 
     sq_head: *const atomic::AtomicU32,
     sq_tail: *const atomic::AtomicU32,
@@ -60,6 +60,7 @@ impl<'a> Submitter<'a> {
     pub(crate) const fn new(
         fd: &'a OwnedFd,
         params: &'a Parameters,
+        enter_ring_fd: &'a Cell<i32>,
         sq_head: *const atomic::AtomicU32,
         sq_tail: *const atomic::AtomicU32,
         sq_local_tail: &'a Cell<u32>,
@@ -68,7 +69,7 @@ impl<'a> Submitter<'a> {
         Submitter {
             fd,
             params,
-            enter_ring_fd: -1,
+            enter_ring_fd,
             sq_head,
             sq_tail,
             sq_local_tail,
@@ -119,7 +120,7 @@ impl<'a> Submitter<'a> {
 
     #[inline]
     fn register_ring(&self) -> RegisterRing {
-        let enter_ring_fd = self.enter_ring_fd;
+        let enter_ring_fd = self.enter_ring_fd.get();
         if enter_ring_fd >= 0 && self.params.is_feature_reg_reg_ring() {
             RegisterRing::RegisteredIndex(enter_ring_fd)
         } else {
@@ -154,7 +155,7 @@ impl<'a> Submitter<'a> {
         // `enter_ring_fd` holds its index (otherwise `-1`); pass it together with
         // `IORING_ENTER_REGISTERED_RING` instead of the raw file descriptor to avoid the per-call
         // fd lookup in the kernel.
-        let enter_ring_fd = self.enter_ring_fd;
+        let enter_ring_fd = self.enter_ring_fd.get();
         let (fd, flag) = if enter_ring_fd >= 0 {
             (enter_ring_fd, flag | sys::IORING_ENTER_REGISTERED_RING)
         } else {
@@ -652,17 +653,19 @@ impl<'a> Submitter<'a> {
     /// [`EnterFlags::REGISTERED_RING`] together with the registered index instead of the raw file
     /// descriptor. This avoids the per-call file descriptor lookup overhead in the kernel.
     ///
-    /// The registration is remembered by this [`Submitter`] and used transparently; call
-    /// [`unregister_ring_fd`](Self::unregister_ring_fd) on the same [`Submitter`] to undo it.
-    /// Calling this while a ring fd is already registered on this [`Submitter`] returns an `EEXIST`
-    /// error.
+    /// The registration is stored in the [`IoUring`](crate::IoUring) instance, so it is used
+    /// transparently by every [`Submitter`] of the ring, including the ones created later by
+    /// [`IoUring::submitter`](crate::IoUring::submitter), [`IoUring::submit`](crate::IoUring::submit)
+    /// and [`IoUring::split`](crate::IoUring::split). Calling this while a ring fd is already
+    /// registered returns an `EEXIST` error. The ring fd is unregistered when the
+    /// [`IoUring`](crate::IoUring) instance is dropped.
     ///
-    /// On kernels with `IORING_FEAT_REG_REG_RING`, registration methods on this [`Submitter`] also
-    /// use the registered ring fd internally.
+    /// On kernels with `IORING_FEAT_REG_REG_RING`, registration methods also use the registered
+    /// ring fd internally.
     ///
     /// Available since Linux 5.18.
-    pub fn register_ring_fd(&mut self) -> io::Result<()> {
-        if self.enter_ring_fd >= 0 {
+    pub fn register_ring_fd(&self) -> io::Result<()> {
+        if self.enter_ring_fd.get() >= 0 {
             return Err(io::Error::from_raw_os_error(libc::EEXIST));
         }
         let raw_fd = self.fd.as_raw_fd();
@@ -676,7 +679,7 @@ impl<'a> Submitter<'a> {
             (&mut up as *mut sys::io_uring_rsrc_update).cast(),
             1,
         )?;
-        self.enter_ring_fd = up.offset as i32;
+        self.enter_ring_fd.set(up.offset as i32);
         Ok(())
     }
 
@@ -686,8 +689,8 @@ impl<'a> Submitter<'a> {
     /// error if no ring fd is registered.
     ///
     /// Available since Linux 5.18.
-    pub fn unregister_ring_fd(&mut self) -> io::Result<()> {
-        let offset = self.enter_ring_fd;
+    pub fn unregister_ring_fd(&self) -> io::Result<()> {
+        let offset = self.enter_ring_fd.get();
         if offset < 0 {
             return Err(io::Error::from_raw_os_error(libc::EINVAL));
         }
@@ -701,7 +704,7 @@ impl<'a> Submitter<'a> {
             cast_ptr::<sys::io_uring_rsrc_update>(&up).cast(),
             1,
         )?;
-        self.enter_ring_fd = -1;
+        self.enter_ring_fd.set(-1);
         Ok(())
     }
 
