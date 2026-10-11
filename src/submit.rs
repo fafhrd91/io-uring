@@ -170,16 +170,39 @@ impl<'a> Submitter<'a> {
     /// Submit all queued submission queue events to the kernel and wait for at least `want`
     /// completion events to complete.
     pub fn submit_and_wait(&self, want: usize) -> io::Result<usize> {
-        let len = self.flush_sq();
-        let mut flags = EnterFlags::empty();
+        match self.prepare_submit(want, EnterFlags::empty()) {
+            (len, Some(flags)) => unsafe {
+                self.enter::<libc::sigset_t>(len as _, want as _, flags.bits(), None)
+            },
+            (len, None) => Ok(len),
+        }
+    }
 
-        // This logic suffers from the fact the sq_cq_overflow and sq_need_wakeup
-        // each cause an atomic load of the same variable, self.sq_flags.
-        // In the hottest paths, when a server is running with sqpoll,
-        // this is going to be hit twice, when once would be sufficient.
-        // However, consider that the `SeqCst` barrier required for interpreting
-        // the IORING_ENTER_SQ_WAKEUP bit is required in all paths where sqpoll
-        // is setup when consolidating the reads.
+    /// Submit all queued submission queue events to the kernel and wait for at least `want`
+    /// completion events to complete with additional options
+    ///
+    /// You can specify a set of signals to mask and a timeout for operation, see
+    /// [`SubmitArgs`](types::SubmitArgs) for more details
+    pub fn submit_with_args(
+        &self,
+        want: usize,
+        args: &types::SubmitArgs<'_, '_>,
+    ) -> io::Result<usize> {
+        match self.prepare_submit(want, EnterFlags::EXT_ARG) {
+            (len, Some(flags)) => unsafe {
+                self.enter(len as _, want as _, flags.bits(), Some(args))
+            },
+            (len, None) => Ok(len),
+        }
+    }
+
+    /// Flush the submission queue and compute the `io_uring_enter` flags.
+    ///
+    /// Returns the number of pending entries and the flags, or `None` if no syscall is needed
+    /// because the SQPOLL thread is awake and will pick the entries up.
+    #[inline]
+    fn prepare_submit(&self, want: usize, mut flags: EnterFlags) -> (usize, Option<EnterFlags>) {
+        let len = self.flush_sq();
 
         let sq_flags = self.load_sq_flags();
         let sq_cq_overflow = sq_flags & sys::IORING_SQ_CQ_OVERFLOW != 0;
@@ -200,59 +223,19 @@ impl<'a> Submitter<'a> {
         }
 
         if self.params.is_setup_sqpoll() {
-            // See discussion in [`SubmissionQueue::need_wakeup`].
+            // See discussion in [`SubmissionQueue::need_wakeup`]. The `SeqCst` fence is
+            // required before reading IORING_SQ_NEED_WAKEUP, so `sq_flags` above can't be reused.
             atomic::fence(atomic::Ordering::SeqCst);
             if self.sq_need_wakeup() {
                 flags.insert(EnterFlags::SQ_WAKEUP);
             } else if want == 0 && !need_syscall {
                 // The kernel thread is polling and hasn't fallen asleep, so we don't need to tell
-                // it to process events or wake it up
-
-                // However, if the CQ ring is overflown, we need to tell the kernel to process events
-                // by calling io_uring_enter with the IORING_ENTER_GETEVENTS flag.
-                return Ok(len);
+                // it to process events or wake it up.
+                return (len, None);
             }
         }
 
-        unsafe { self.enter::<libc::sigset_t>(len as _, want as _, flags.bits(), None) }
-    }
-
-    /// Submit all queued submission queue events to the kernel and wait for at least `want`
-    /// completion events to complete with additional options
-    ///
-    /// You can specify a set of signals to mask and a timeout for operation, see
-    /// [`SubmitArgs`](types::SubmitArgs) for more details
-    pub fn submit_with_args(
-        &self,
-        want: usize,
-        args: &types::SubmitArgs<'_, '_>,
-    ) -> io::Result<usize> {
-        let len = self.flush_sq();
-        let mut flags = EnterFlags::EXT_ARG;
-
-        let sq_flags = self.load_sq_flags();
-        let sq_cq_overflow = sq_flags & sys::IORING_SQ_CQ_OVERFLOW != 0;
-        let sq_taskrun = sq_flags & sys::IORING_SQ_TASKRUN != 0;
-        let need_syscall = (sq_cq_overflow && self.params.is_feature_nodrop()) || sq_taskrun;
-
-        // Deferred task work is only run by an enter carrying GETEVENTS.
-        if want > 0 || self.params.is_setup_iopoll() || sq_cq_overflow || sq_taskrun {
-            flags.insert(EnterFlags::GETEVENTS);
-        }
-
-        if self.params.is_setup_sqpoll() {
-            // See discussion in [`SubmissionQueue::need_wakeup`].
-            atomic::fence(atomic::Ordering::SeqCst);
-            if self.sq_need_wakeup() {
-                flags.insert(EnterFlags::SQ_WAKEUP);
-            } else if want == 0 && !need_syscall {
-                // The kernel thread is polling and hasn't fallen asleep, so we don't need to tell
-                // it to process events or wake it up
-                return Ok(len);
-            }
-        }
-
-        unsafe { self.enter(len as _, want as _, flags.bits(), Some(args)) }
+        (len, Some(flags))
     }
 
     /// Wait for the submission queue to have free entries.

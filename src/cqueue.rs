@@ -16,7 +16,6 @@ pub(crate) struct Inner<E: EntryMarker> {
 
     cqes: *const E,
 
-    #[allow(dead_code)]
     flags: *const atomic::AtomicU32,
 }
 
