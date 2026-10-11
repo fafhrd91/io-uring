@@ -901,8 +901,7 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         ring.submission()
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
-                    .buf_group(0xdead)
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .buffer_select(0xdead)
                     .user_data(0x22);
             })
             .ok()
@@ -922,8 +921,7 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         ring.submission()
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
-                    .buf_group(0xdead)
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .buffer_select(0xdead)
                     .user_data(0x23);
             })
             .ok()
@@ -960,8 +958,7 @@ pub fn test_tcp_buffer_select<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         ring.submission()
             .push(|entry| {
                 opcode::Recv::new(entry, recv_fd, std::ptr::null_mut(), 1024)
-                    .buf_group(0xdeae)
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .buffer_select(0xdeae)
                     .user_data(0x25);
             })
             .ok()
@@ -1077,8 +1074,7 @@ pub fn test_tcp_buffer_select_recvmsg<S: squeue::EntryMarker, C: cqueue::EntryMa
         ring.submission()
             .push(|entry| {
                 opcode::RecvMsg::new(entry, recv_fd, &mut msg as *mut _)
-                    .buf_group(BGID) // else result is -105, ENOBUFS, no buffer space available
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT) // else result is -14, EFAULT
+                    .buffer_select(BGID)
                     .user_data(0x27);
             })
             .ok()
@@ -1170,8 +1166,7 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
         ring.submission()
             .push(|entry| {
                 opcode::Readv::new(entry, recv_fd, &iovec, 1)
-                    .buf_group(BGID)
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT)
+                    .buffer_select(BGID)
                     .user_data(0x2a);
             })
             .ok()

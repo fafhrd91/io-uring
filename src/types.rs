@@ -1,4 +1,10 @@
 //! Common Linux types not provided by libc.
+use std::{marker::PhantomData, num::NonZeroU32, os::unix::io::RawFd};
+
+use bitflags::bitflags;
+
+use crate::sys;
+use crate::util::{cast_ptr, unwrap_nonzero, unwrap_u32};
 
 pub(crate) mod sealed {
     use super::{Fd, Fixed};
@@ -40,15 +46,8 @@ pub(crate) mod sealed {
     }
 }
 
-use crate::sys;
-use crate::util::{cast_ptr, unwrap_nonzero, unwrap_u32};
-use bitflags::bitflags;
-use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::num::NonZeroU32;
-use std::os::unix::io::RawFd;
-
-#[deprecated]
+/// Per-I/O read/write flags.
+#[deprecated(note = "`rw_flags` setters take `i32`")]
 pub type RwFlags = u32;
 pub use sys::{
     IORING_MEM_REGION_TYPE_USER, IORING_ZCRX_AREA_SHIFT, IOU_PBUF_RING_INC, IOU_PBUF_RING_MMAP,
@@ -59,6 +58,7 @@ pub use sys::{
 // From linux/io_uring.h
 //
 // NOTE: bindgen skips this due to the expression so we define it manually.
+/// Mask of the area offset bits in a zero copy receive buffer offset.
 pub const IORING_ZCRX_AREA_MASK: u64 = !((1u64 << IORING_ZCRX_AREA_SHIFT) - 1);
 
 /// Opaque types, you should use [`statx`](struct@libc::statx) instead.
@@ -101,16 +101,23 @@ bitflags! {
     /// CQE will still contain -libc::ETIME in the res field
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub struct TimeoutFlags: u32 {
+        /// The timespec is an absolute time.
         const ABS = sys::IORING_TIMEOUT_ABS;
 
+        /// Use `CLOCK_BOOTTIME` for absolute timeouts.
         const BOOTTIME = sys::IORING_TIMEOUT_BOOTTIME;
 
+        /// Use `CLOCK_REALTIME` for absolute timeouts.
         const REALTIME = sys::IORING_TIMEOUT_REALTIME;
 
+        /// Update a linked timeout instead of a regular one, used with
+        /// [`TimeoutUpdate`](super::TimeoutUpdate).
         const LINK_TIMEOUT_UPDATE = sys::IORING_LINK_TIMEOUT_UPDATE;
 
+        /// Treat an expired timeout as success, dependent links are not severed.
         const ETIME_SUCCESS = sys::IORING_TIMEOUT_ETIME_SUCCESS;
 
+        /// Post a completion each time the timeout expires. Available since 6.4.
         const MULTISHOT = sys::IORING_TIMEOUT_MULTISHOT;
     }
 }
@@ -119,6 +126,7 @@ bitflags! {
     /// Options for [`Fsync`](super::Fsync).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub struct FsyncFlags: u32 {
+        /// Sync only data, like `fdatasync(2)`.
         const DATASYNC = sys::IORING_FSYNC_DATASYNC;
     }
 }
@@ -179,6 +187,7 @@ bitflags! {
 pub struct OpenHow(sys::open_how);
 
 impl OpenHow {
+    /// Create an empty `open_how`.
     pub const fn new() -> Self {
         OpenHow(sys::open_how {
             flags: 0,
@@ -187,27 +196,32 @@ impl OpenHow {
         })
     }
 
+    /// Open flags, as in the `flags` argument of `openat(2)`.
     pub const fn flags(mut self, flags: u64) -> Self {
         self.0.flags = flags;
         self
     }
 
+    /// File mode bits for a newly created file.
     pub const fn mode(mut self, mode: u64) -> Self {
         self.0.mode = mode;
         self
     }
 
+    /// `RESOLVE_*` flags controlling path resolution.
     pub const fn resolve(mut self, resolve: u64) -> Self {
         self.0.resolve = resolve;
         self
     }
 }
 
+/// A timeout value, wrapper around the kernel's `__kernel_timespec`.
 #[derive(Default, Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Timespec(pub(crate) sys::__kernel_timespec);
 
 impl Timespec {
+    /// Create a zero timespec.
     #[inline]
     pub const fn new() -> Self {
         Timespec(sys::__kernel_timespec {
@@ -216,12 +230,14 @@ impl Timespec {
         })
     }
 
+    /// Set the seconds.
     #[inline]
     pub const fn sec(mut self, sec: u64) -> Self {
         self.0.tv_sec = sec as _;
         self
     }
 
+    /// Set the nanoseconds.
     #[inline]
     pub const fn nsec(mut self, nsec: u32) -> Self {
         self.0.tv_nsec = nsec as _;
@@ -265,6 +281,7 @@ pub struct SubmitArgs<'prev: 'now, 'now> {
 }
 
 impl<'prev, 'now> SubmitArgs<'prev, 'now> {
+    /// Create empty submit arguments.
     #[inline]
     pub const fn new() -> SubmitArgs<'static, 'static> {
         let args = sys::io_uring_getevents_arg {
@@ -325,10 +342,10 @@ impl<'prev, 'now> SubmitArgs<'prev, 'now> {
     }
 }
 
+/// An entry in a buf_ring that allows setting the address, length and buffer id.
 #[repr(transparent)]
 pub struct BufRingEntry(sys::io_uring_buf);
 
-/// An entry in a buf_ring that allows setting the address, length and buffer id.
 #[allow(clippy::len_without_is_empty)]
 impl BufRingEntry {
     /// Sets the entry addr.
@@ -688,6 +705,7 @@ impl CancelBuilder {
 pub struct FutexWaitV(sys::futex_waitv);
 
 impl FutexWaitV {
+    /// Create an empty `futex_waitv`.
     pub const fn new() -> Self {
         Self(sys::futex_waitv {
             val: 0,
@@ -697,16 +715,19 @@ impl FutexWaitV {
         })
     }
 
+    /// The expected value of the futex.
     pub const fn val(mut self, val: u64) -> Self {
         self.0.val = val;
         self
     }
 
+    /// The address of the futex.
     pub const fn uaddr(mut self, uaddr: u64) -> Self {
         self.0.uaddr = uaddr;
         self
     }
 
+    /// `FUTEX2_*` flags of the futex.
     pub const fn flags(mut self, flags: u32) -> Self {
         self.0.flags = flags;
         self
@@ -714,7 +735,7 @@ impl FutexWaitV {
 }
 
 /// Strategy the kernel uses to track which NAPI instances to busy-poll, used by
-/// [`Napi::tracking`].
+/// [`Napi::set_tracking`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NapiTracking {
     /// The kernel discovers NAPI ids automatically from the sockets used on the ring.
@@ -749,6 +770,7 @@ impl NapiTracking {
 pub struct Napi(sys::io_uring_napi);
 
 impl Napi {
+    /// Create a NAPI configuration with dynamic tracking and busy polling disabled.
     pub const fn new() -> Self {
         Napi(sys::io_uring_napi {
             busy_poll_to: 0,

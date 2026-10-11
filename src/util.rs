@@ -1,7 +1,4 @@
-use std::num::NonZeroU32;
-use std::os::unix::io::AsRawFd;
-use std::sync::atomic;
-use std::{io, ptr};
+use std::{io, num::NonZeroU32, os::unix::io::AsRawFd, ptr, sync::atomic};
 
 pub(crate) mod private {
     /// Private trait that we use as a supertrait of `EntryMarker` to prevent it from being

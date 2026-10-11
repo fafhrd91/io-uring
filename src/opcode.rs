@@ -17,15 +17,11 @@
 //!     .flags(libc::O_RDONLY)
 //!     .user_data(0x42);
 //! ```
-
 #![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
-
-use std::os::unix::io::RawFd;
-use std::{convert::TryInto, mem};
+use std::{convert::TryInto, mem, os::unix::io::RawFd};
 
 use crate::squeue::{Entry, Entry128, Flags};
-use crate::sys;
-use crate::types::{self, sealed};
+use crate::{sys, types, types::sealed};
 
 macro_rules! assign_fd {
     ( $sqe:ident, $fd:expr ) => {
@@ -90,6 +86,10 @@ macro_rules! opcode {
             /// supported with the current kernel.
             pub const CODE: u8 = $code as _;
 
+            #[doc = concat!(
+                "Initialize `entry` as a [`", stringify!($name), "`] operation with its required ",
+                "arguments.\n\nThe entry must be zeroed, see the [module docs](self).",
+            )]
             $( #[$new_meta] )*
             #[inline]
             pub fn new(entry: &'a mut impl AsMut<Entry> $(, $arg: $aty )*) -> Self {
@@ -142,6 +142,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// File offset, see [`Read::offset`].
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
@@ -152,8 +153,13 @@ opcode! {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
 
-    fn buf_group(sqe, buf_group: u16) {
+    /// Select the buffer from the provided buffer group `buf_group`.
+    ///
+    /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
+    /// flag, the length limits the size of the selected buffer.
+    fn buffer_select(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 }
 
@@ -331,6 +337,8 @@ opcode! {
         }
     }
 
+    /// Issue a multishot poll, a CQE is posted for each event until the request
+    /// is cancelled or fails. Available since 5.13.
     fn multi(sqe, multi: bool) {
         sqe.len = if multi { sys::IORING_POLL_ADD_MULTI } else { 0 };
     }
@@ -358,12 +366,12 @@ opcode! {
         sqe.len = len;
     }
 
-    /// the offset method holds the offset in bytes
+    /// Offset in bytes of the start of the range.
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
 
-    /// the flags method holds the flags for the command
+    /// `SYNC_FILE_RANGE_*` flags, as in the `flags` argument of `sync_file_range(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.sync_range_flags = flags;
     }
@@ -388,6 +396,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `sendmsg(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
     }
@@ -410,12 +419,18 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recvmsg(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
     }
 
-    fn buf_group(sqe, buf_group: u16) {
+    /// Select the buffer from the provided buffer group `buf_group`.
+    ///
+    /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
+    /// flag, the length limits the size of the selected buffer.
+    fn buffer_select(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 }
 
@@ -423,7 +438,7 @@ opcode! {
     /// Receive multiple messages on a socket, equivalent to `recvmsg(2)`.
     ///
     /// Parameters:
-    ///     msg:       For this multishot variant of ResvMsg, only the msg_namelen and msg_controllen
+    ///     msg:       For this multishot variant of RecvMsg, only the msg_namelen and msg_controllen
     ///                fields are relevant.
     ///     buf_group: The id of the provided buffer pool to use for each received message.
     ///
@@ -458,6 +473,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recvmsg(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
     }
@@ -487,6 +503,7 @@ opcode! {
         sqe.__bindgen_anon_1.off = count as _;
     }
 
+    /// Timeout flags, see [`types::TimeoutFlags`].
     fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits();
     }
@@ -516,6 +533,7 @@ opcode! {
         sqe.__bindgen_anon_3.timeout_flags = sys::IORING_TIMEOUT_UPDATE;
     }
 
+    /// Timeout flags, see [`types::TimeoutFlags`].
     fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits() | sys::IORING_TIMEOUT_UPDATE;
     }
@@ -531,10 +549,13 @@ opcode! {
         sqe.__bindgen_anon_1.addr2 = addrlen as _;
     }
 
+    /// Install the resulting file descriptor into the given fixed file table slot,
+    /// `None` returns a regular file descriptor.
     fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
         sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
 
+    /// Flags, as in the `flags` argument of `accept4(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
     }
@@ -560,6 +581,7 @@ opcode! {
         unsafe { *sqe.__bindgen_anon_6.optval.as_mut() = optval as u64 };
     }
 
+    /// `IORING_URING_CMD_*` flags.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.uring_cmd_flags = flags;
     }
@@ -576,8 +598,10 @@ opcode! {
 }
 
 opcode! {
+    /// Timeout for the previous request in a link chain.
+    ///
     /// This request must be linked with another request through
-    /// [`Flags::IO_LINK`](crate::squeue::Flags::IO_LINK) which is described below.
+    /// [`Flags::IO_LINK`](crate::squeue::Flags::IO_LINK) set on the preceding request.
     /// Unlike [`Timeout`], [`LinkTimeout`] acts on the linked request, not the completion queue.
     pub struct LinkTimeout = sys::IORING_OP_LINK_TIMEOUT;
 
@@ -587,6 +611,7 @@ opcode! {
         sqe.len = 1;
     }
 
+    /// Timeout flags, see [`types::TimeoutFlags`].
     fn flags(sqe, flags: types::TimeoutFlags) {
         sqe.__bindgen_anon_3.timeout_flags = flags.bits();
     }
@@ -614,10 +639,12 @@ opcode! {
         sqe.__bindgen_anon_2.addr = len;
     }
 
+    /// File offset, as in the `offset` argument of `fallocate(2)`.
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
 
+    /// Allocation mode, as in the `mode` argument of `fallocate(2)`.
     fn mode(sqe, mode: i32) {
         sqe.len = mode as _;
     }
@@ -632,14 +659,18 @@ opcode! {
         sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
+    /// Install the resulting file descriptor into the given fixed file table slot,
+    /// `None` returns a regular file descriptor.
     fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
         sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
 
+    /// Open flags, as in the `flags` argument of `openat(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.open_flags = flags as _;
     }
 
+    /// File mode bits, as in the `mode` argument of the system call.
     fn mode(sqe, mode: libc::mode_t) {
         sqe.len = mode;
     }
@@ -674,6 +705,7 @@ opcode! {
         sqe.len = len;
     }
 
+    /// Index of the first fixed file table slot to update.
     fn offset(sqe, offset: i32) {
         sqe.__bindgen_anon_1.off = offset as _;
     }
@@ -694,24 +726,26 @@ opcode! {
         sqe.__bindgen_anon_1.off = statxbuf as _;
     }
 
+    /// `AT_*` flags, as in the `flags` argument of `statx(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.statx_flags = flags as _;
     }
 
+    /// `STATX_*` mask of the requested fields, as in `statx(2)`.
     fn mask(sqe, mask: u32) {
         sqe.len = mask;
     }
 }
 
 opcode! {
-    /// Issue the equivalent of a `pread(2)` or `pwrite(2)` system call
+    /// Issue the equivalent of a `pread(2)` system call.
     ///
     /// * `fd` is the file descriptor to be operated on,
-    /// * `addr` contains the buffer in question,
-    /// * `len` contains the length of the IO operation,
+    /// * `buf` contains the buffer in question,
+    /// * `len` contains the length of the IO operation.
     ///
-    /// These are non-vectored versions of the `IORING_OP_READV` and `IORING_OP_WRITEV` opcodes.
-    /// See also `read(2)` and `write(2)` for the general description of the related system call.
+    /// This is the non-vectored version of [`Readv`].
+    /// See also `read(2)` for the general description of the related system call.
     ///
     /// Available since 5.6.
     pub struct Read = sys::IORING_OP_READ;
@@ -722,10 +756,10 @@ opcode! {
         sqe.len = len;
     }
 
-    /// `offset` contains the read or write offset.
+    /// File offset, defaults to zero.
     ///
     /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
-    /// If `offset` is set to `-1`, the offset will use (and advance) the file position,
+    /// If `offset` is set to `u64::MAX`, the current file position is used (and advanced),
     /// like the `read(2)` and `write(2)` system calls.
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
@@ -736,24 +770,30 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// Per-I/O `RWF_*` flags, as in the `flags` argument of `preadv2(2)`.
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
 
-    fn buf_group(sqe, buf_group: u16) {
+    /// Select the buffer from the provided buffer group `buf_group`.
+    ///
+    /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
+    /// flag, the length limits the size of the selected buffer.
+    fn buffer_select(sqe, buf_group: u16) {
         sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 }
 
 opcode! {
-    /// Issue the equivalent of a `pread(2)` or `pwrite(2)` system call
+    /// Issue the equivalent of a `pwrite(2)` system call.
     ///
     /// * `fd` is the file descriptor to be operated on,
-    /// * `addr` contains the buffer in question,
-    /// * `len` contains the length of the IO operation,
+    /// * `buf` contains the buffer in question,
+    /// * `len` contains the length of the IO operation.
     ///
-    /// These are non-vectored versions of the `IORING_OP_READV` and `IORING_OP_WRITEV` opcodes.
-    /// See also `read(2)` and `write(2)` for the general description of the related system call.
+    /// This is the non-vectored version of [`Writev`].
+    /// See also `write(2)` for the general description of the related system call.
     ///
     /// Available since 5.6.
     pub struct Write = sys::IORING_OP_WRITE;
@@ -764,10 +804,10 @@ opcode! {
         sqe.len = len;
     }
 
-    /// `offset` contains the read or write offset.
+    /// File offset, defaults to zero.
     ///
     /// If `fd` does not refer to a seekable file, `offset` must be set to zero.
-    /// If `offset` is set to `-1`, the offset will use (and advance) the file position,
+    /// If `offset` is set to `u64::MAX`, the current file position is used (and advanced),
     /// like the `read(2)` and `write(2)` system calls.
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
@@ -778,6 +818,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// Per-I/O `RWF_*` flags, as in the `flags` argument of `pwritev2(2)`.
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
@@ -800,6 +841,7 @@ opcode! {
         sqe.__bindgen_anon_3.fadvise_advice = advice as _;
     }
 
+    /// File offset, as in the `offset` argument of `posix_fadvise(2)`.
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
@@ -832,6 +874,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `send(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
@@ -844,6 +887,7 @@ opcode! {
         sqe.__bindgen_anon_1.addr2 = dest_addr as _;
     }
 
+    /// Length of the destination address set by `dest_addr`.
     fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
     }
@@ -864,15 +908,12 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
 
-    fn buf_group(sqe, buf_group: u16) {
-        sqe.__bindgen_anon_4.buf_group = buf_group;
-    }
-
-    /// Receive into a buffer selected from the provided buffer group `buf_group`.
+    /// Select the buffer from the provided buffer group `buf_group`.
     ///
     /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
     /// flag, the length limits the size of the selected buffer.
@@ -906,10 +947,12 @@ opcode! {
         sqe.ioprio = sys::IORING_RECV_MULTISHOT as _;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
 
+    /// Maximum number of bytes to receive per completion, `0` uses the buffer size.
     fn len(sqe, len: u32) {
         sqe.len = len;
     }
@@ -931,6 +974,8 @@ opcode! {
         sqe.__bindgen_anon_1.off = how as _;
     }
 
+    /// Install the resulting file descriptor into the given fixed file table slot,
+    /// `None` returns a regular file descriptor.
     fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
         sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
@@ -959,8 +1004,8 @@ opcode! {
 opcode! {
     /// Splice data to/from a pipe, equivalent to `splice(2)`.
     ///
-    /// if `fd_in` refers to a pipe, `off_in` must be `-1`;
-    /// The description of `off_in` also applied to `off_out`.
+    /// If `fd_in` refers to a pipe, `off_in` must be `-1`.
+    /// The description of `off_in` also applies to `off_out`.
     pub struct Splice = sys::IORING_OP_SPLICE;
 
     fn new(
@@ -1071,13 +1116,14 @@ opcode! {
         sqe.__bindgen_anon_1.off = newpath as _;
     }
 
+    /// Flags, as in the `flags` argument of `renameat2(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.rename_flags = flags;
     }
 }
 
 opcode! {
-    /// Delete a name and possible the file it refers to, equivalent to `unlinkat(2)`.
+    /// Delete a name and possibly the file it refers to, equivalent to `unlinkat(2)`.
     /// Available since kernel 5.11.
     pub struct UnlinkAt = sys::IORING_OP_UNLINKAT;
 
@@ -1086,6 +1132,7 @@ opcode! {
         sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
+    /// Flags, as in the `flags` argument of `unlinkat(2)` (e.g. `AT_REMOVEDIR`).
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.unlink_flags = flags as _;
     }
@@ -1102,6 +1149,7 @@ opcode! {
         sqe.__bindgen_anon_2.addr = pathname as _;
     }
 
+    /// Directory mode bits, as in the `mode` argument of `mkdirat(2)`.
     fn mode(sqe, mode: libc::mode_t) {
         sqe.len = mode;
     }
@@ -1140,6 +1188,7 @@ opcode! {
         sqe.__bindgen_anon_1.addr2 = newpath as _;
     }
 
+    /// Flags, as in the `flags` argument of `linkat(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.hardlink_flags = flags as _;
     }
@@ -1182,6 +1231,7 @@ opcode! {
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = path as _ };
     }
 
+    /// Flags, as in the `flags` argument of `setxattr(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.xattr_flags = flags as _;
     }
@@ -1222,6 +1272,7 @@ opcode! {
         sqe.__bindgen_anon_1.off = value as _;
     }
 
+    /// Flags, as in the `flags` argument of `fsetxattr(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.xattr_flags = flags as _;
     }
@@ -1319,6 +1370,9 @@ impl<'a> UringCmd80<'a> {
     /// supported with the current kernel.
     pub const CODE: u8 = sys::IORING_OP_URING_CMD as _;
 
+    /// Initialize `entry` as a [`UringCmd80`] operation with its required arguments.
+    ///
+    /// The entry must be zeroed, see the [module docs](self).
     #[inline]
     pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
         let Entry128(entry, cmd2) = entry;
@@ -1390,10 +1444,13 @@ opcode! {
         sqe.len = protocol as _;
     }
 
+    /// Install the resulting file descriptor into the given fixed file table slot,
+    /// `None` returns a regular file descriptor.
     fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
         sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = flags as _;
     }
@@ -1414,6 +1471,8 @@ opcode! {
         sqe.ioprio = sys::IORING_ACCEPT_MULTISHOT as u16;
     }
 
+    /// Install each accepted socket into a free fixed file table slot allocated
+    /// by the kernel, instead of returning a regular file descriptor.
     fn allocate_file_index(sqe, allocate_file_index: bool) {
         sqe.__bindgen_anon_5.file_index = if allocate_file_index {
             sys::IORING_FILE_INDEX_ALLOC as u32
@@ -1422,6 +1481,7 @@ opcode! {
         };
     }
 
+    /// Flags, as in the `flags` argument of `accept4(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.accept_flags = flags as _;
     }
@@ -1447,16 +1507,18 @@ opcode! {
         sqe.__bindgen_anon_5.file_index = dest_slot_index.kernel_index_arg();
     }
 
+    /// Flags, ORed with already set flags.
     fn opcode_flags(sqe, opcode_flags: u32) {
-        sqe.__bindgen_anon_3.msg_ring_flags = opcode_flags;
+        unsafe { sqe.__bindgen_anon_3.msg_ring_flags |= opcode_flags };
     }
 }
 
 opcode! {
     /// Send a zerocopy message on a socket, equivalent to `send(2)`.
     ///
-    /// When `dest_addr` is non-zero it points to the address of the target with `dest_addr_len`
-    /// specifying its size, turning the request into a `sendto(2)`
+    /// When [`dest_addr`](Self::dest_addr) is set, it points to the address of the target with
+    /// [`dest_addr_len`](Self::dest_addr_len) specifying its size, turning the request into a
+    /// `sendto(2)`.
     ///
     /// A fixed (pre-mapped) buffer can optionally be used from pre-mapped buffers that have been
     /// previously registered with [`Submitter::register_buffers`](crate::Submitter::register_buffers).
@@ -1494,10 +1556,12 @@ opcode! {
         sqe.__bindgen_anon_1.addr2 = dest_addr as _;
     }
 
+    /// Length of the destination address set by `dest_addr`.
     fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `send(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
@@ -1535,6 +1599,7 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `sendmsg(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.msg_flags = flags;
     }
@@ -1553,16 +1618,17 @@ opcode! {
         sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 
+    /// File offset, see [`Read::offset`].
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
 }
 
 opcode! {
-    /// Wait on a futex, like but not equivalant to `futex(2)`'s `FUTEX_WAIT_BITSET`.
+    /// Wait on a futex, like but not equivalent to `futex(2)`'s `FUTEX_WAIT_BITSET`.
     ///
     /// Wait on a futex at address `futex` and which still has the value `val` and with `futex2(2)`
-    /// flags of `futex_flags`. `musk` can be set to a specific bitset mask, which will be matched
+    /// flags of `futex_flags`. `mask` can be set to a specific bitset mask, which will be matched
     /// by the waking side to decide who to wake up. To always get woken, an application may use
     /// `FUTEX_BITSET_MATCH_ANY` (truncated to futex bits). `futex_flags` follows the `futex2(2)`
     /// flags, not the `futex(2)` v1 interface flags. `flags` are currently unused and hence `0`
@@ -1576,13 +1642,14 @@ opcode! {
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
     }
 }
 
 opcode! {
-    /// Wake up waiters on a futex, like but not equivalant to `futex(2)`'s `FUTEX_WAKE_BITSET`.
+    /// Wake up waiters on a futex, like but not equivalent to `futex(2)`'s `FUTEX_WAKE_BITSET`.
     ///
     /// Wake any waiters on the futex indicated by `futex` and at most `val` futexes. `futex_flags`
     /// indicates the `futex2(2)` modifier flags. If a given bitset for who to wake is desired,
@@ -1598,6 +1665,7 @@ opcode! {
         unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
     }
@@ -1616,6 +1684,7 @@ opcode! {
         sqe.len = nr_futex;
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.futex_flags = flags;
     }
@@ -1633,10 +1702,12 @@ opcode! {
         sqe.__bindgen_anon_5.file_index = options as _;
     }
 
+    /// Where to store the `siginfo_t` of the child, as in `waitid(2)`.
     fn infop(sqe, infop: *const libc::siginfo_t) {
         sqe.__bindgen_anon_1.addr2 = infop as _;
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: libc::c_uint) {
         sqe.__bindgen_anon_3.waitid_flags = flags;
     }
@@ -1683,10 +1754,12 @@ opcode! {
         sqe.__bindgen_anon_4.buf_group = buf_group;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `send(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
 
+    /// Maximum number of bytes to send, `0` sends all selected buffers.
     fn len(sqe, len: u32) {
         sqe.len = len;
     }
@@ -1711,6 +1784,7 @@ opcode! {
         sqe.ioprio = sys::IORING_RECVSEND_BUNDLE as u16;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
@@ -1743,6 +1817,7 @@ opcode! {
         sqe.ioprio = (sys::IORING_RECV_MULTISHOT | sys::IORING_RECVSEND_BUNDLE) as u16;
     }
 
+    /// `MSG_*` flags, as in the `flags` argument of `recv(2)`.
     fn flags(sqe, flags: i32) {
         sqe.__bindgen_anon_3.msg_flags = flags as _;
     }
@@ -1783,6 +1858,7 @@ opcode! {
         sqe.ioprio = sys::IORING_RECV_MULTISHOT as u16;
     }
 
+    /// Index of the registered zero copy receive interface queue.
     fn ifq(sqe, ifq: u32) {
         sqe.__bindgen_anon_5.zcrx_ifq_idx = ifq;
     }
@@ -1803,6 +1879,7 @@ opcode! {
         sqe.len = max_events;
     }
 
+    /// Reserved for future use, must be zero.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.poll32_events = flags;
     }
@@ -1830,10 +1907,12 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// File offset, see [`Read::offset`].
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
 
+    /// Per-I/O `RWF_*` flags, as in the `flags` argument of `preadv2(2)`.
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
@@ -1861,10 +1940,12 @@ opcode! {
         sqe.ioprio |= ioprio;
     }
 
+    /// File offset, see [`Write::offset`].
     fn offset(sqe, offset: u64) {
         sqe.__bindgen_anon_1.off = offset;
     }
 
+    /// Per-I/O `RWF_*` flags, as in the `flags` argument of `pwritev2(2)`.
     fn rw_flags(sqe, rw_flags: i32) {
         sqe.__bindgen_anon_3.rw_flags = rw_flags as _;
     }
@@ -1887,10 +1968,13 @@ opcode! {
         sqe.__bindgen_anon_2.addr = fds as _;
     }
 
+    /// Flags, as in the `flags` argument of `pipe2(2)`.
     fn flags(sqe, flags: u32) {
         sqe.__bindgen_anon_3.pipe_flags = flags;
     }
 
+    /// Install the resulting file descriptor into the given fixed file table slot,
+    /// `None` returns a regular file descriptor.
     fn file_index(sqe, file_index: Option<types::DestinationSlot>) {
         sqe.__bindgen_anon_5.file_index = file_index.map_or(0, |d| d.kernel_index_arg());
     }
@@ -2047,7 +2131,7 @@ mod tests {
     fn entry128_accepts_ops() {
         let mut entry = Entry128::from(Entry::default());
         Nop::new(&mut entry).user_data(9);
-        assert_eq!(entry.get_opcode(), Nop::CODE as u32);
+        assert_eq!(entry.get_opcode(), Nop::CODE);
         assert_eq!(entry.get_user_data(), 9);
     }
 }

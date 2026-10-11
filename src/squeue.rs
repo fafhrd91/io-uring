@@ -37,6 +37,7 @@ impl<'a, E: EntryMarker> Copy for SubmissionQueue<'a, E> {}
 ///
 /// This is implemented for [`Entry`] and [`Entry128`].
 pub trait EntryMarker: Clone + Debug + From<Entry> + AsMut<Entry> + private::Sealed {
+    /// `IORING_SETUP_*` flags required by this entry type when building the ring.
     const BUILD_FLAGS: u32;
 
     /// Set the application-supplied user data.
@@ -147,9 +148,9 @@ bitflags! {
         const ASYNC = 1 << sys::IOSQE_ASYNC_BIT;
 
         /// Conceptually the kernel holds a set of buffers organized into groups. When you issue a
-        /// request with this flag and set `buf_group` to a valid buffer group ID (e.g.
-        /// [`buf_group` on `Read`](crate::opcode::Read::buf_group)) then once the file descriptor
-        /// becomes ready the kernel will try to take a buffer from the group.
+        /// request with this flag and a valid buffer group ID (e.g. with
+        /// [`Read::buffer_select`](crate::opcode::Read::buffer_select), which sets both) then once
+        /// the file descriptor becomes ready the kernel will try to take a buffer from the group.
         ///
         /// If there are no buffers in the group, your request will fail with `-ENOBUFS`. Otherwise,
         /// the corresponding [`cqueue::Entry::flags`](crate::cqueue::Entry::flags) will contain the
@@ -340,7 +341,7 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     }
 
     /// Returns `true` if completions are pending that should be processed. Only relevant when used
-    /// in conjuction with the `setup_taskrun_flag` function. Available since 5.19.
+    /// in conjunction with the `setup_taskrun_flag` function. Available since 5.19.
     pub fn taskrun(&self) -> bool {
         unsafe { (*self.queue.flags).load(atomic::Ordering::Acquire) & sys::IORING_SQ_TASKRUN != 0 }
     }
@@ -466,8 +467,8 @@ impl Entry {
 
     /// Get the opcode associated with this entry.
     #[inline]
-    pub fn get_opcode(&self) -> u32 {
-        self.0.opcode.into()
+    pub fn get_opcode(&self) -> u8 {
+        self.0.opcode
     }
 
     /// Set the personality of this event. You can obtain a personality using
@@ -570,8 +571,8 @@ impl Entry128 {
 
     /// Get the opcode associated with this entry.
     #[inline]
-    pub fn get_opcode(&self) -> u32 {
-        self.0.0.opcode.into()
+    pub fn get_opcode(&self) -> u8 {
+        self.0.0.opcode
     }
 }
 

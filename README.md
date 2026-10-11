@@ -1,23 +1,34 @@
-# Linux IO Uring
-[![github actions](https://github.com/tokio-rs/io-uring/workflows/ci/badge.svg)](https://github.com/tokio-rs/io-uring/actions)
-[![crates](https://img.shields.io/crates/v/io-uring.svg)](https://crates.io/crates/io-uring)
-[![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/tokio-rs/io-uring/blob/master/LICENSE-MIT)
-[![license](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tokio-rs/io-uring/blob/master/LICENSE-APACHE)
-[![docs.rs](https://docs.rs/io-uring/badge.svg)](https://docs.rs/io-uring/)
+# ntex-io-uring
 
-The low-level [`io_uring`](https://kernel.dk/io_uring.pdf) userspace interface for Rust.
+[![CI](https://github.com/fafhrd91/io-uring/actions/workflows/ci.yml/badge.svg)](https://github.com/fafhrd91/io-uring/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/fafhrd91/io-uring/graph/badge.svg)](https://codecov.io/gh/fafhrd91/io-uring)
+[![crates.io](https://img.shields.io/crates/v/ntex-io-uring.svg)](https://crates.io/crates/ntex-io-uring)
+[![Documentation](https://img.shields.io/docsrs/ntex-io-uring/latest)](https://docs.rs/ntex-io-uring)
+[![MSRV](https://img.shields.io/badge/rustc-1.97+-lightgray.svg)](https://releases.rs/docs/1.97.0/)
+[![License](https://img.shields.io/crates/l/ntex-io-uring.svg)](https://github.com/fafhrd91/io-uring#license)
+
+The low-level [`io_uring`](https://kernel.dk/io_uring.pdf) userspace interface for Rust,
+used by the [ntex](https://github.com/ntex-rs/ntex) runtime.
+
+This is a fork of [tokio-rs/io-uring](https://github.com/tokio-rs/io-uring).
+Main differences:
+
+* Submission entries are initialized in place: `SubmissionQueue::push` takes a closure
+  that receives the `squeue::Entry` and fills it with `opcode::X::new(entry, ..)`.
+  No intermediate entry is built and copied into the ring.
+* Buffer selection is enabled with a single `buffer_select(group)` call.
+* Rust 2024 edition, minimum supported Rust version is 1.97.
 
 ## Usage
 
-To use `io-uring` crate, first add this to your `Cargo.toml`:
+Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 ntex-io-uring = "1"
 ```
 
-Next we can start using `io-uring` crate.
-The following is quick introduction using `Read` for file.
+The following is a quick introduction that reads a file with `Read`:
 
 ```rust
 use ntex_io_uring::{opcode, types, IoUring};
@@ -58,20 +69,23 @@ fn main() -> io::Result<()> {
 }
 ```
 
-Note that opcode `Read` is only available after kernel 5.6.
-If you use a kernel lower than 5.6, this example will fail.
+Note that the `Read` opcode requires Linux 5.6 or later.
+Use `Probe` to check which opcodes the running kernel supports.
 
 ## Test and Benchmarks
 
-You can run the test and benchmark of the library with the following commands.
+Run the unit tests, the kernel integration tests and the benchmarks with:
 
 ```
+$ cargo test
 $ cargo run --package io-uring-test
 $ cargo bench --package io-uring-bench
 ```
 
+The integration tests need a kernel with io_uring enabled. In Docker, run the container
+with `--security-opt seccomp=unconfined`.
 
-### License
+## License
 
 This project is licensed under either of
 

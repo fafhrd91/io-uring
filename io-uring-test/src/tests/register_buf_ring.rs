@@ -596,9 +596,8 @@ where
             .push(|entry: &mut S| {
                 opcode::Read::new(entry, fd, std::ptr::null_mut(), len)
                     .offset(0)
-                    .buf_group(bgid)
-                    .user_data(0x02)
-                    .sqe_flags(squeue::Flags::BUFFER_SELECT);
+                    .buffer_select(bgid)
+                    .user_data(0x02);
             })
             .ok()
             .expect("queue is full");

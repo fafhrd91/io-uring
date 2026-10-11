@@ -1,18 +1,12 @@
-use std::cell::Cell;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic;
-use std::{io, mem, ptr};
+use std::{cell::Cell, io, mem, ptr, sync::atomic};
 
-use crate::Parameters;
-use crate::register::{Probe, RegisterRing, execute};
-use crate::sys;
-use crate::types::{CancelBuilder, CloneBuffersFlags, Napi, Timespec};
-use crate::util::{OwnedFd, cast_ptr};
 use bitflags::bitflags;
 
-use crate::register::Restriction;
-
-use crate::types;
+use crate::register::{Probe, RegisterRing, Restriction, execute};
+use crate::types::{CancelBuilder, CloneBuffersFlags, Napi, Timespec};
+use crate::util::{OwnedFd, cast_ptr};
+use crate::{Parameters, sys, types};
 
 bitflags!(
     /// See man page for complete description:

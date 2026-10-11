@@ -1,9 +1,7 @@
 //! Completion Queue
 
 use std::fmt::{self, Debug};
-use std::mem;
-use std::mem::MaybeUninit;
-use std::sync::atomic;
+use std::{mem, mem::MaybeUninit, sync::atomic};
 
 use crate::sys;
 use crate::util::{Mmap, private, unsync_load};
@@ -79,6 +77,7 @@ impl Debug for CompletionStatus {
 ///
 /// This is implemented for [`Entry`] and [`Entry32`].
 pub trait EntryMarker: Clone + Debug + Into<Entry> + private::Sealed {
+    /// `IORING_SETUP_*` flags required by this entry type when building the ring.
     const BUILD_FLAGS: u32;
 
     /// Get the application-supplied user data.
@@ -259,6 +258,7 @@ impl<E: EntryMarker> CompletionQueue<'_, E> {
         self.len() == self.capacity()
     }
 
+    /// Pop completion entries into `entries`, returns the filled part of the slice.
     #[inline]
     pub fn fill<'a>(&mut self, entries: &'a mut [MaybeUninit<E>]) -> &'a mut [E] {
         let len = std::cmp::min(self.len(), entries.len());

@@ -12,8 +12,16 @@
 
 * `EntryMarker` requires `AsMut<Entry>`
 
-* Add `opcode::Recv::buffer_select()`, selects the receive buffer from a
-  provided buffer group
+* `buf_group()` on `Read`, `Readv`, `Recv` and `RecvMsg` is replaced by
+  `buffer_select()`, which also sets the `BUFFER_SELECT` flag
+
+* `MsgRingSendFd::opcode_flags()` ORs flags like other flag setters
+
+* `squeue::Entry::get_opcode()` returns `u8`
+
+* Remove deprecated `IoUring::submission_shared()`
+
+* Document all opcode constructors and setters, fix opcode docs
 
 * Fix `opcode::ReadMulti` clearing `FIXED_FILE` for fixed file descriptors
 

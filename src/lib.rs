@@ -23,7 +23,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! ntex-io-uring = { version = "0.7", features = ["bindgen"] }
+//! ntex-io-uring = { version = "1", features = ["bindgen"] }
 //! ```
 //!
 //! This will generate bindings at build time for your specific architecture.
@@ -43,6 +43,12 @@
 //!
 //! This approach allows you to provide your own bindings without relying on bindgen or the prebuilt bindings.
 
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::{cmp, io, marker::PhantomData, mem, mem::ManuallyDrop};
+
+#[cfg(feature = "io_safety")]
+use std::os::unix::io::{AsFd, BorrowedFd};
+
 #[macro_use]
 mod util;
 pub mod cqueue;
@@ -53,17 +59,10 @@ mod submit;
 mod sys;
 pub mod types;
 
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::{cmp, io, marker::PhantomData, mem, mem::ManuallyDrop};
-
-#[cfg(feature = "io_safety")]
-use std::os::unix::io::{AsFd, BorrowedFd};
-
 pub use cqueue::{CompletionQueue, CompletionStatus};
 pub use register::Probe;
 pub use squeue::SubmissionQueue;
-pub use submit::EnterFlags;
-pub use submit::Submitter;
+pub use submit::{EnterFlags, Submitter};
 use util::{Mmap, OwnedFd};
 
 /// IoUring instance
@@ -308,17 +307,6 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
         self.sq.borrow()
     }
 
-    /// Get the submission queue of the io_uring instance from a shared reference.
-    ///
-    /// Equivalent to [`submission`](Self::submission). Queue state is shared, so multiple
-    /// [`SubmissionQueue`] handles may coexist.
-    #[deprecated(note = "use `IoUring::submission` instead")]
-    #[inline]
-    pub fn submission_shared(&self) -> SubmissionQueue<'_, S> {
-        self.sq.sync();
-        self.sq.borrow()
-    }
-
     /// Get completion queue of the io_uring instance. This is used to receive I/O completion
     /// events from the kernel.
     #[inline]
@@ -550,7 +538,7 @@ impl Parameters {
         self.0.features & sys::IORING_FEAT_SUBMIT_STABLE != 0
     }
 
-    /// If this flag is set, applications can specify offset == -1 with [`Readv`](opcode::Readv),
+    /// If this flag is set, applications can specify offset == `u64::MAX` with [`Readv`](opcode::Readv),
     /// [`Writev`](opcode::Writev), [`ReadFixed`](opcode::ReadFixed),
     /// [`WriteFixed`](opcode::WriteFixed), [`Read`](opcode::Read) and [`Write`](opcode::Write),
     /// which behaves exactly like setting offset == -1 in `preadv2(2)` and `pwritev2(2)`: it’ll use
