@@ -1,5 +1,11 @@
 # Changes
 
+## [1.1.0] - 2026-10-19
+
+* opcode setters for `cmd`, `optval`, `addr3` and `pi_attr`, and `Probe`, no
+  longer access memory through references to zero-sized bindgen fields, which
+  is undefined behavior under Stacked Borrows
+
 ## [1.0.0] - 2026-10-11
 
 * opcodes initialize the submission entry in place. `X::new(&mut entry, ..)`
