@@ -62,6 +62,24 @@ macro_rules! opcode_common {
     };
 }
 
+/// Returns a member of the `__bindgen_anon_6` union.
+///
+/// Bindgen declares the members of that union as zero-sized fields, so a
+/// reference to one does not cover the member's bytes. The member is reached
+/// through a pointer to the whole union instead.
+///
+/// # Safety
+///
+/// `T` must be a member of the union.
+#[inline(always)]
+unsafe fn sqe_anon6<T>(sqe: &mut sys::io_uring_sqe) -> &mut T {
+    const {
+        assert!(size_of::<T>() <= size_of::<sys::io_uring_sqe__bindgen_ty_6>());
+        assert!(align_of::<T>() <= align_of::<sys::io_uring_sqe__bindgen_ty_6>());
+    }
+    unsafe { &mut *(&raw mut sqe.__bindgen_anon_6).cast::<T>() }
+}
+
 #[inline(always)]
 fn reset_entry(entry: &mut impl EntryMarker) -> &mut sys::io_uring_sqe {
     entry.reset();
@@ -256,7 +274,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -300,7 +318,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -381,7 +399,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -427,7 +445,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -749,7 +767,7 @@ opcode! {
         sqe.__bindgen_anon_2.__bindgen_anon_1.level = level;
         sqe.__bindgen_anon_2.__bindgen_anon_1.optname = optname;
         sqe.__bindgen_anon_5.optlen = optlen;
-        unsafe { *sqe.__bindgen_anon_6.optval.as_mut() = optval as u64 };
+        unsafe { *sqe_anon6::<u64>(sqe) = optval as u64 };
     }
 
     /// `IORING_URING_CMD_*` flags.
@@ -970,7 +988,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -1025,7 +1043,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -1465,7 +1483,7 @@ opcode! {
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
-        unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = path as _ };
+        unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_1>(sqe).addr3 = path as _ };
     }
 }
 
@@ -1483,7 +1501,7 @@ opcode! {
         sqe.__bindgen_anon_2.addr = name as _;
         sqe.len = len;
         sqe.__bindgen_anon_1.off = value as _;
-        unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = path as _ };
+        unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_1>(sqe).addr3 = path as _ };
     }
 
     /// Flags, as in the `flags` argument of `setxattr(2)`.
@@ -1601,7 +1619,7 @@ opcode! {
 
     /// Arbitrary command data.
     fn cmd(sqe, cmd: [u8; 16]) {
-        unsafe { *sqe.__bindgen_anon_6.cmd.as_mut().as_mut_ptr().cast::<[u8; 16]>() = cmd };
+        unsafe { *sqe_anon6::<[u8; 16]>(sqe) = cmd };
     }
 
     /// The `addr` is typically a pointer to buffer or iovecs,
@@ -1670,15 +1688,7 @@ macro_rules! uring_cmd80 {
             #[inline]
             pub fn cmd(self, cmd: [u8; 80]) -> Self {
                 let cmd1: [u8; 16] = cmd[..16].try_into().unwrap();
-                unsafe {
-                    *self
-                        .sqe
-                        .__bindgen_anon_6
-                        .cmd
-                        .as_mut()
-                        .as_mut_ptr()
-                        .cast::<[u8; 16]>() = cmd1
-                };
+                unsafe { *sqe_anon6::<[u8; 16]>(self.sqe) = cmd1 };
                 self.cmd2.copy_from_slice(&cmd[16..]);
                 self
             }
@@ -1818,7 +1828,7 @@ opcode! {
         sqe.__bindgen_anon_2.addr = sys::IORING_MSG_SEND_FD.into();
         assign_fd!(sqe, ring_fd);
         sqe.__bindgen_anon_1.off = user_data;
-        unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = fixed_slot_src.0 as u64 };
+        unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_1>(sqe).addr3 = fixed_slot_src.0 as u64 };
         sqe.__bindgen_anon_5.file_index = dest_slot_index.kernel_index_arg();
     }
 
@@ -1972,7 +1982,7 @@ opcode! {
         sqe.fd = futex_flags as _;
         sqe.__bindgen_anon_2.addr = futex as usize as _;
         sqe.__bindgen_anon_1.off = val;
-        unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
+        unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_1>(sqe).addr3 = mask };
     }
 
     /// Reserved for future use, must be zero.
@@ -1995,7 +2005,7 @@ opcode! {
         sqe.fd = futex_flags as _;
         sqe.__bindgen_anon_2.addr = futex as usize as _;
         sqe.__bindgen_anon_1.off = val;
-        unsafe { sqe.__bindgen_anon_6.__bindgen_anon_1.as_mut().addr3 = mask };
+        unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_1>(sqe).addr3 = mask };
     }
 
     /// Reserved for future use, must be zero.
@@ -2285,7 +2295,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -2333,7 +2343,7 @@ opcode! {
     ///
     /// `attr` must stay valid until the request is submitted. Available since 6.14.
     fn pi_attr(sqe, attr: *const types::io_uring_attr_pi) {
-        let pi = unsafe { sqe.__bindgen_anon_6.__bindgen_anon_2.as_mut() };
+        let pi = unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(sqe) };
         pi.attr_ptr = attr as u64;
         pi.attr_type_mask = sys::IORING_RW_ATTR_FLAG_PI as u64;
     }
@@ -2550,16 +2560,7 @@ mod tests {
         UringCmd80::new(&mut entry, Fd(1), 9).cmd(cmd).user_data(5);
         assert_eq!(entry.0.0.opcode, UringCmd80::CODE);
         assert_eq!(entry.get_user_data(), 5);
-        let cmd1 = unsafe {
-            *entry
-                .0
-                .0
-                .__bindgen_anon_6
-                .cmd
-                .as_ref()
-                .as_ptr()
-                .cast::<[u8; 16]>()
-        };
+        let cmd1 = unsafe { *sqe_anon6::<[u8; 16]>(&mut entry.0.0) };
         assert_eq!(cmd1[..], cmd[..16]);
         assert_eq!(entry.1[..], cmd[16..]);
     }
@@ -2705,7 +2706,8 @@ mod tests {
         let mut entry = Entry::default();
         let attr = 0x3000 as *const types::io_uring_attr_pi;
         Read::new(&mut entry, Fd(1), std::ptr::null_mut(), 0).pi_attr(attr);
-        let pi = unsafe { entry.0.__bindgen_anon_6.__bindgen_anon_2.as_ref() };
+        let pi =
+            unsafe { sqe_anon6::<sys::io_uring_sqe__bindgen_ty_6__bindgen_ty_2>(&mut entry.0) };
         assert_eq!(pi.attr_ptr, 0x3000);
         assert_eq!(pi.attr_type_mask, sys::IORING_RW_ATTR_FLAG_PI as u64);
     }

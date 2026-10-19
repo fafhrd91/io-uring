@@ -47,21 +47,14 @@ impl Probe {
 
     #[inline]
     pub(crate) fn as_mut_ptr(&mut self) -> *mut sys::io_uring_probe {
-        &mut (self.0).0
+        // the kernel writes the ops after the header, so the pointer covers both
+        (&raw mut self.0).cast()
     }
 
     /// Get whether a specific opcode is supported.
     pub fn is_supported(&self, opcode: u8) -> bool {
-        unsafe {
-            let probe = &(self.0).0;
-
-            if opcode <= probe.last_op {
-                let ops = probe.ops.as_slice(Self::COUNT);
-                ops[opcode as usize].flags & (sys::IO_URING_OP_SUPPORTED as u16) != 0
-            } else {
-                false
-            }
-        }
+        opcode <= (self.0).0.last_op
+            && (self.0).1[opcode as usize].flags & (sys::IO_URING_OP_SUPPORTED as u16) != 0
     }
 }
 
@@ -83,9 +76,7 @@ impl fmt::Debug for Probe {
             }
         }
 
-        let probe = &(self.0).0;
-        let list = unsafe { probe.ops.as_slice(probe.last_op as usize + 1) };
-        let list = list
+        let list = (self.0).1[..=(self.0).0.last_op as usize]
             .iter()
             .filter(|op| op.flags & (sys::IO_URING_OP_SUPPORTED as u16) != 0)
             .map(Op);
@@ -162,4 +153,26 @@ fn test_probe_layout() {
         Layout::new::<sys::io_uring_probe>().align(),
         Layout::for_value(&probe.0).align()
     );
+}
+
+#[test]
+fn test_probe_supported() {
+    let mut probe = Probe::new();
+    assert!(!probe.is_supported(0));
+    assert_eq!(format!("{probe:?}"), "{}");
+
+    (probe.0).0.last_op = 2;
+    for code in [0, 2, 3] {
+        (probe.0).1[code] = sys::io_uring_probe_op {
+            op: code as u8,
+            flags: sys::IO_URING_OP_SUPPORTED as u16,
+            ..Default::default()
+        };
+    }
+    assert!(probe.is_supported(0));
+    assert!(!probe.is_supported(1));
+    assert!(probe.is_supported(2));
+    assert!(!probe.is_supported(3));
+    assert!(!probe.is_supported(255));
+    assert_eq!(format!("{probe:?}"), "{Op { code: 0 }, Op { code: 2 }}");
 }
