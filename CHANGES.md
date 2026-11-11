@@ -6,6 +6,10 @@
   `io_uring_enter`, so `SubmissionQueue::len()` and `is_full()` reflect
   entries consumed by the kernel without a separate `sync()`
 
+* `SubmitArgs::sigmask()` passes the kernel signal set size, `_NSIG / 8`,
+  instead of `size_of::<libc::sigset_t>()`, which the kernel rejected with
+  `EINVAL`
+
 ## [1.1.0] - 2026-10-19
 
 * opcode setters for `cmd`, `optval`, `addr3` and `pi_attr`, and `Probe`, no
