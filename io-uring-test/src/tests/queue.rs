@@ -314,7 +314,8 @@ pub fn test_queue_split<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     sq.sync();
 
     assert_eq!(submitter.submit()?, sq.capacity());
-    assert!(sq.is_full());
+    // `submit` refreshes the cached head, so the consumed entries are freed without `sync`
+    assert!(sq.is_empty());
     sq.sync();
     assert!(sq.is_empty());
 

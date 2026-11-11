@@ -129,6 +129,19 @@ where
 #[repr(transparent)]
 pub struct Parameters(sys::io_uring_params);
 
+/// Reject an `IORING_SETUP_SQE_MIXED` ring that cannot fit a padded 128-byte entry,
+/// which takes three slots when it would wrap.
+fn check_mixed_sq_entries(p: &sys::io_uring_params) -> io::Result<()> {
+    if p.flags & sys::IORING_SETUP_SQE_MIXED != 0 && p.sq_entries < 4 {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a ring set up with `IORING_SETUP_SQE_MIXED` needs at least 4 submission queue entries",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 impl IoUring<squeue::Entry, cqueue::Entry> {
     /// Create a new `IoUring` instance with default configuration parameters. See [`Builder`] to
     /// customize it further.
@@ -138,8 +151,22 @@ impl IoUring<squeue::Entry, cqueue::Entry> {
     pub fn new(entries: u32) -> io::Result<Self> {
         Self::builder().build(entries)
     }
+}
 
+impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// Create an `IoUring` instance from a pre-opened file descriptor.
+    ///
+    /// The entry types must match the layout the ring was created with: `S` must be
+    /// [`squeue::Entry128`] for an `IORING_SETUP_SQE128` ring, and `C` must be
+    /// [`cqueue::Entry32`] for an `IORING_SETUP_CQE32` ring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] without taking ownership of `fd` if the
+    /// `IORING_SETUP_SQE128` or `IORING_SETUP_CQE32` flags in `params` do not match `S` and `C`,
+    /// if `IORING_SETUP_SQE_MIXED` is set with [`squeue::Entry128`] or with fewer than 4
+    /// submission queue entries, or if `IORING_SETUP_CQE_MIXED` is set, which is not supported.
+    /// Other errors close `fd`.
     ///
     /// # Safety
     ///
@@ -147,11 +174,21 @@ impl IoUring<squeue::Entry, cqueue::Entry> {
     /// `params` argument must be equivalent to the those previously filled in by the kernel when
     /// the provided ring was created.
     pub unsafe fn from_fd(fd: RawFd, params: Parameters) -> io::Result<Self> {
+        let flags = params.0.flags;
+        let layout = flags & (sys::IORING_SETUP_SQE128 | sys::IORING_SETUP_CQE32);
+        if layout != S::BUILD_FLAGS | C::BUILD_FLAGS
+            || (flags & sys::IORING_SETUP_SQE_MIXED != 0 && S::BUILD_FLAGS != 0)
+            || flags & sys::IORING_SETUP_CQE_MIXED != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ring entry layout does not match the `IoUring` entry types",
+            ));
+        }
+        check_mixed_sq_entries(&params.0)?;
         Self::with_fd_and_params(OwnedFd::from_raw_fd(fd), params.0)
     }
-}
 
-impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
     /// Create a [`Builder`] for an `IoUring` instance.
     ///
     /// This allows for further customization than [`new`](Self::new).
@@ -172,6 +209,7 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
 
     fn with_params(entries: u32, mut p: sys::io_uring_params) -> io::Result<Self> {
         let fd: OwnedFd = unsafe { OwnedFd::from_raw_fd(sys::io_uring_setup(entries, &mut p)?) };
+        check_mixed_sq_entries(&p)?;
         unsafe { Self::with_fd_and_params(fd, p) }
     }
 
@@ -323,6 +361,8 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> IoUring<S, C> {
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Drop for IoUring<S, C> {
     fn drop(&mut self) {
         // A registered ring fd holds a reference to the ring until the thread exits.
+        // Errors are ignored: if restrictions deny `IORING_UNREGISTER_RING_FDS`, the
+        // registration leaks until thread exit, see `Submitter::register_ring_fd`.
         if self.core.enter_ring_fd.get() >= 0 {
             let _ = self.submitter().unregister_ring_fd();
         }
@@ -487,6 +527,12 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Builder<S, C> {
 
     /// Build an [IoUring], with the specified number of entries in the submission queue and
     /// completion queue unless [`setup_cqsize`](Self::setup_cqsize) has been called.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] if
+    /// [`setup_sqe_mixed`](Self::setup_sqe_mixed) is set and the submission queue has fewer
+    /// than 4 entries, in addition to the errors of `io_uring_setup`.
     pub fn build(&self, entries: u32) -> io::Result<IoUring<S, C>> {
         let ring = IoUring::with_params(entries, self.params)?;
 
@@ -505,8 +551,9 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> Builder<S, C> {
 impl<C: cqueue::EntryMarker> Builder<squeue::Entry, C> {
     /// Allow 128-byte operations, such as [`Nop128`](opcode::Nop128) and
     /// [`UringCmd128`](opcode::UringCmd128), in a queue of 64-byte entries. They are pushed
-    /// with [`SubmissionQueue::push128`] and take two slots. The queue needs at least 2 entries.
-    /// Available since 6.19.
+    /// with [`SubmissionQueue::push128`] and take two slots, plus a padding slot when the entry
+    /// would wrap. The submission queue needs at least 4 entries, otherwise
+    /// [`build`](Self::build) returns [`io::ErrorKind::InvalidInput`]. Available since 6.19.
     pub fn setup_sqe_mixed(&mut self) -> &mut Self {
         self.params.flags |= sys::IORING_SETUP_SQE_MIXED;
         self
@@ -748,5 +795,154 @@ impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> AsRawFd for IoUring<S, C> {
 impl<S: squeue::EntryMarker, C: cqueue::EntryMarker> AsFd for IoUring<S, C> {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.core.fd.as_fd()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dup_ring<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+        ring: &IoUring<S, C>,
+    ) -> (RawFd, Parameters) {
+        let fd = unsafe { libc::dup(ring.as_raw_fd()) };
+        assert!(fd >= 0);
+        (fd, ring.params().clone())
+    }
+
+    fn fd_is_open(fd: RawFd) -> bool {
+        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    }
+
+    /// STATEMENT: `from_fd` imports `SQE128` and `CQE32` rings with matching entry types.
+    ///
+    /// HOW:
+    /// - Create an `Entry128`/`Entry32` ring and import a duplicate of its fd with the same
+    ///   types.
+    /// - Submit two `Nop`s through the imported ring.
+    /// - Check both completions carry their own user data, which a wrong stride would corrupt.
+    #[test]
+    fn from_fd_imports_matching_layout() {
+        let ring = IoUring::<squeue::Entry128, cqueue::Entry32>::builder()
+            .build(4)
+            .unwrap();
+        let (fd, params) = dup_ring(&ring);
+        let mut imported =
+            unsafe { IoUring::<squeue::Entry128, cqueue::Entry32>::from_fd(fd, params) }.unwrap();
+        unsafe {
+            let sq = imported.submission();
+            for user_data in [11, 22] {
+                sq.push(|e| {
+                    opcode::Nop::new(e).user_data(user_data);
+                })
+                .unwrap();
+            }
+        }
+        imported.submit_and_wait(2).unwrap();
+        let cqes: Vec<_> = imported
+            .completion()
+            .map(|e| (e.user_data(), e.result()))
+            .collect();
+        assert_eq!(cqes, [(11, 0), (22, 0)]);
+    }
+
+    /// STATEMENT: `from_fd` rejects a ring whose entry layout does not match the entry types
+    /// and leaves the fd open.
+    ///
+    /// HOW:
+    /// - Import a duplicate fd of an `SQE128` ring as default entries, and of a default ring as
+    ///   `Entry128` and as `Entry32`.
+    /// - Check each import fails with `InvalidInput` and the duplicate fd is still open.
+    #[test]
+    fn from_fd_rejects_mismatched_layout() {
+        fn check<S: squeue::EntryMarker, C: cqueue::EntryMarker>(fd: RawFd, params: Parameters) {
+            let err = unsafe { IoUring::<S, C>::from_fd(fd, params) }
+                .err()
+                .unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            assert!(fd_is_open(fd));
+            unsafe { libc::close(fd) };
+        }
+
+        let ring128 = IoUring::<squeue::Entry128>::builder().build(4).unwrap();
+        let (fd, params) = dup_ring(&ring128);
+        check::<squeue::Entry, cqueue::Entry>(fd, params);
+
+        let ring = IoUring::new(4).unwrap();
+        let (fd, params) = dup_ring(&ring);
+        check::<squeue::Entry128, cqueue::Entry>(fd, params);
+        let (fd, params) = dup_ring(&ring);
+        check::<squeue::Entry, cqueue::Entry32>(fd, params);
+    }
+
+    /// STATEMENT: a mixed ring needs at least 4 submission queue entries, so a padded 128-byte
+    /// entry always fits once the queue drains.
+    ///
+    /// HOW:
+    /// - Build a mixed ring with 2 entries and check it fails with `InvalidInput` raised by the
+    ///   crate rather than the kernel.
+    /// - Import a mixed ring whose parameters report 2 entries and check `from_fd` fails the
+    ///   same way and leaves the fd open.
+    /// - Build a mixed ring with 3 entries, which the kernel rounds up to 4, fill it to the last
+    ///   slot, drain it, and check a `Nop128` that needs padding is pushed and completes.
+    #[test]
+    fn sqe_mixed_requires_four_entries() {
+        let ring = match IoUring::<squeue::Entry>::builder()
+            .setup_sqe_mixed()
+            .build(4)
+        {
+            Ok(ring) => ring,
+            // the kernel does not support `IORING_SETUP_SQE_MIXED`
+            Err(e) if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::EOPNOTSUPP)) => return,
+            Err(e) => panic!("{e}"),
+        };
+
+        let err = IoUring::<squeue::Entry>::builder()
+            .setup_sqe_mixed()
+            .build(2)
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.raw_os_error(), None);
+
+        let (fd, mut params) = dup_ring(&ring);
+        params.0.sq_entries = 2;
+        let err = unsafe { IoUring::<squeue::Entry>::from_fd(fd, params) }
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(fd_is_open(fd));
+        unsafe { libc::close(fd) };
+
+        let mut ring = IoUring::<squeue::Entry>::builder()
+            .setup_sqe_mixed()
+            .build(3)
+            .unwrap();
+        assert_eq!(ring.params().sq_entries(), 4);
+        unsafe {
+            let sq = ring.submission();
+            for user_data in 1..=3 {
+                sq.push(|e| {
+                    opcode::Nop::new(e).user_data(user_data);
+                })
+                .unwrap();
+            }
+        }
+        ring.submit_and_wait(3).unwrap();
+        assert_eq!(ring.completion().count(), 3);
+        unsafe {
+            ring.submission()
+                .push128(|e| {
+                    opcode::Nop128::new(e).user_data(4);
+                })
+                .map_err(|_| "queue is full")
+                .unwrap();
+        }
+        ring.submit_and_wait(1).unwrap();
+        let cqes: Vec<_> = ring
+            .completion()
+            .map(|e| (e.user_data(), e.result()))
+            .collect();
+        assert_eq!(cqes, [(4, 0)]);
     }
 }

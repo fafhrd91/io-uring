@@ -45,7 +45,9 @@ pub fn test_register_buffers<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         |ring, iovecs, _| {
             let submitter = ring.submitter();
             submitter.register_buffers_sparse(iovecs.len() as _)?;
-            unsafe { submitter.register_buffers_update(0, iovecs, None) }
+            let n = unsafe { submitter.register_buffers_update(0, iovecs, None) }?;
+            assert_eq!(n, iovecs.len());
+            Ok(())
         },
     )?;
 

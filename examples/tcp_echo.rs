@@ -108,6 +108,20 @@ fn main() -> anyhow::Result<()> {
                     token_alloc.get(token_index),
                     io::Error::from_raw_os_error(-ret)
                 );
+
+                match token_alloc[token_index].clone() {
+                    // the accept entry is reused, push it again
+                    Token::Accept => accept.count += 1,
+                    Token::Poll { fd } => {
+                        token_alloc.remove(token_index);
+                        unsafe { libc::close(fd) };
+                    }
+                    Token::Read { fd, buf_index } | Token::Write { fd, buf_index, .. } => {
+                        bufpool.push(buf_index);
+                        token_alloc.remove(token_index);
+                        unsafe { libc::close(fd) };
+                    }
+                }
                 continue;
             }
 
@@ -192,10 +206,10 @@ fn main() -> anyhow::Result<()> {
                     offset,
                     len,
                 } => {
-                    let write_len = ret as usize;
+                    let offset = offset + ret as usize;
 
                     let mut entry = squeue::Entry::default();
-                    if offset + write_len >= len {
+                    if offset >= len {
                         bufpool.push(buf_index);
 
                         *token = Token::Poll { fd };
@@ -203,10 +217,7 @@ fn main() -> anyhow::Result<()> {
                         opcode::PollAdd::new(&mut entry, types::Fd(fd), libc::POLLIN as _)
                             .user_data(token_index as _);
                     } else {
-                        let offset = offset + write_len;
-                        let len = len - offset;
-
-                        let buf = &buf_alloc[buf_index][offset..];
+                        let buf = &buf_alloc[buf_index][offset..len];
 
                         *token = Token::Write {
                             fd,
@@ -215,7 +226,7 @@ fn main() -> anyhow::Result<()> {
                             len,
                         };
 
-                        opcode::Write::new(&mut entry, types::Fd(fd), buf.as_ptr(), len as _)
+                        opcode::Send::new(&mut entry, types::Fd(fd), buf.as_ptr(), buf.len() as _)
                             .user_data(token_index as _);
                     };
 
