@@ -2,6 +2,14 @@
 
 ## [1.2.0] - 2026-11-11
 
+* Add `Submitter::submit_with_args_and_flags()`, which also accepts
+  `EnterFlags::ABS_TIMER` and `EnterFlags::NO_IOWAIT` for the wait; any other
+  flag fails with `EINVAL`
+
+* Add `opcode::GetSockOpt`, a `getsockopt(2)` through `IORING_OP_URING_CMD`
+
+* Add `opcode::Send::buffer_select()`, to send from a provided buffer
+
 * `Submitter::submit*()` refresh the cached submission queue head after
   `io_uring_enter`, so `SubmissionQueue::len()` and `is_full()` reflect
   entries consumed by the kernel without a separate `sync()`

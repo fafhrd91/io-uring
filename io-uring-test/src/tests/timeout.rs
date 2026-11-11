@@ -392,6 +392,100 @@ pub fn test_timeout_submit_args<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     Ok(())
 }
 
+/// STATEMENT: `submit_with_args_and_flags` refuses argument-changing flags and passes
+/// `ABS_TIMER` and `NO_IOWAIT` to the wait.
+///
+/// HOW:
+/// - `EXT_ARG_REG` fails with `EINVAL`.
+/// - A deadline one second from now with `ABS_TIMER` waits about a second, then expires at
+///   once when reused in the past.
+/// - With `NO_IOWAIT`, when supported, a short relative timeout still ends with `ETIME`.
+pub fn test_timeout_submit_args_abs<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+    ring: &mut IoUring<S, C>,
+    test: &Test,
+) -> anyhow::Result<()> {
+    require! {
+        test;
+        ring.params().is_feature_ext_arg();
+    };
+
+    println!("test timeout_submit_args_abs");
+
+    // Flags that change how `args` is read are refused.
+    let args = types::SubmitArgs::new();
+    match ring.submitter().submit_with_args_and_flags(
+        0,
+        &args,
+        ntex_io_uring::EnterFlags::EXT_ARG_REG,
+    ) {
+        Err(ref err) if err.raw_os_error() == Some(libc::EINVAL) => (),
+        res => panic!("unexpected result: {:?}", res),
+    }
+
+    if ring.params().is_feature_no_iowait() {
+        let ts = types::Timespec::new().nsec(10_000_000);
+        let args = types::SubmitArgs::new().timespec(&ts);
+        match ring.submitter().submit_with_args_and_flags(
+            1,
+            &args,
+            ntex_io_uring::EnterFlags::NO_IOWAIT,
+        ) {
+            Ok(_) => panic!(),
+            Err(ref err) if err.raw_os_error() == Some(libc::ETIME) => (),
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let ret = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    assert_eq!(ret, 0);
+
+    // A deadline one second from now.
+    let ts = types::Timespec::new()
+        .sec(now.tv_sec as u64 + 1)
+        .nsec(now.tv_nsec as u32);
+    let args = types::SubmitArgs::new().timespec(&ts);
+
+    let start = Instant::now();
+    match ring.submitter().submit_with_args_and_flags(
+        1,
+        &args,
+        ntex_io_uring::EnterFlags::ABS_TIMER,
+    ) {
+        Ok(_) => panic!(),
+        Err(ref err) if err.raw_os_error() == Some(libc::ETIME) => (),
+        Err(ref err) if err.raw_os_error() == Some(libc::EINVAL) => {
+            // `IORING_ENTER_ABS_TIMER` needs kernel 6.12.
+            println!("skipping: kernel rejects IORING_ENTER_ABS_TIMER");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    }
+    // Read as a duration, the deadline would be about the system's uptime away.
+    let elapsed = start.elapsed().as_millis();
+    assert!((500..2000).contains(&elapsed), "waited {} ms", elapsed);
+
+    // The same deadline, now in the past, expires at once.
+    let start = Instant::now();
+    match ring.submitter().submit_with_args_and_flags(
+        1,
+        &args,
+        ntex_io_uring::EnterFlags::ABS_TIMER,
+    ) {
+        Ok(_) => panic!(),
+        Err(ref err) if err.raw_os_error() == Some(libc::ETIME) => (),
+        Err(err) => return Err(err.into()),
+    }
+    assert!(start.elapsed().as_millis() < 100);
+
+    assert!(ring.completion().next().is_none());
+
+    Ok(())
+}
+
 pub fn test_timeout_submit_args_min_wait<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
     test: &Test,

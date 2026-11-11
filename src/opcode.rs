@@ -836,6 +836,36 @@ opcode! {
 }
 
 opcode! {
+    /// Get a socket option, equivalent to `getsockopt(2)`.
+    ///
+    /// The value is written to `optval`, which has room for `optlen` bytes; on success the
+    /// completion's result is the value's length. The kernel only supports level `SOL_SOCKET`
+    /// (other levels fail with `EOPNOTSUPP`). Available since kernel 6.7.
+    pub struct GetSockOpt = sys::IORING_OP_URING_CMD;
+
+    fn new(
+        sqe,
+        fd: impl sealed::UseFixed,
+        level: u32,
+        optname: u32,
+        optval: *mut libc::c_void,
+        optlen: u32,
+    ) {
+        assign_fd!(sqe, fd);
+        sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = sys::SOCKET_URING_OP_GETSOCKOPT;
+        sqe.__bindgen_anon_2.__bindgen_anon_1.level = level;
+        sqe.__bindgen_anon_2.__bindgen_anon_1.optname = optname;
+        sqe.__bindgen_anon_5.optlen = optlen;
+        unsafe { *sqe_anon6::<u64>(sqe) = optval as u64 };
+    }
+
+    /// `IORING_URING_CMD_*` flags.
+    fn flags(sqe, flags: u32) {
+        sqe.__bindgen_anon_3.uring_cmd_flags = flags;
+    }
+}
+
+opcode! {
     /// Attempt to cancel an already issued request.
     pub struct AsyncCancel = sys::IORING_OP_ASYNC_CANCEL;
 
@@ -1179,6 +1209,18 @@ opcode! {
     /// Length of the destination address set by `dest_addr`.
     fn dest_addr_len(sqe, dest_addr_len: libc::socklen_t) {
         sqe.__bindgen_anon_5.__bindgen_anon_1.addr_len = dest_addr_len as _;
+    }
+
+    /// Send from a buffer selected from the provided buffer group `buf_group`, `buf` is ignored.
+    ///
+    /// Sets `buf_group` and the [`BUFFER_SELECT`](crate::squeue::Flags::BUFFER_SELECT)
+    /// flag, the length limits the number of bytes sent. The completion reports the
+    /// selected buffer, see [`cqueue::buffer_select`](crate::cqueue::buffer_select). Use
+    /// [`SendBundle`] to send several buffers. Not combinable with
+    /// [`buf_index`](Self::buf_index), which shares the field. Available since 6.10.
+    fn buffer_select(sqe, buf_group: u16) {
+        sqe.__bindgen_anon_4.buf_group = buf_group;
+        sqe.flags |= Flags::BUFFER_SELECT.bits();
     }
 
     /// Use the registered buffer `buf_index`, `buf` and `len` must fall within it.

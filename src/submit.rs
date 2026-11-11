@@ -185,7 +185,31 @@ impl<'a> Submitter<'a> {
         want: usize,
         args: &types::SubmitArgs<'_, '_>,
     ) -> io::Result<usize> {
-        match self.prepare_submit(want, EnterFlags::EXT_ARG) {
+        self.submit_with_args_and_flags(want, args, EnterFlags::empty())
+    }
+
+    /// Like [`submit_with_args`](Self::submit_with_args), with extra `flags` for the wait.
+    ///
+    /// Only these flags are accepted; any other fails with `EINVAL`, without entering the kernel:
+    ///
+    /// - [`EnterFlags::ABS_TIMER`]: the timeout in `args` is an absolute time on the ring's clock
+    ///   (`CLOCK_MONOTONIC` unless registered otherwise), not a duration. Available since kernel
+    ///   6.12.
+    /// - [`EnterFlags::NO_IOWAIT`]: the wait is not accounted as iowait. See
+    ///   [`Parameters::is_feature_no_iowait`](crate::Parameters::is_feature_no_iowait).
+    ///
+    /// A kernel that doesn't know a flag fails with `EINVAL`.
+    pub fn submit_with_args_and_flags(
+        &self,
+        want: usize,
+        args: &types::SubmitArgs<'_, '_>,
+        flags: EnterFlags,
+    ) -> io::Result<usize> {
+        if !(EnterFlags::ABS_TIMER | EnterFlags::NO_IOWAIT).contains(flags) {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+
+        match self.prepare_submit(want, flags | EnterFlags::EXT_ARG) {
             (len, Some(flags)) => {
                 let res = unsafe { self.enter(len as _, want as _, flags.bits(), Some(args)) };
                 self.refresh_head();
