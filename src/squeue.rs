@@ -678,9 +678,7 @@ impl private::Sealed for Entry {}
 
 impl private::SqeReset for Entry {
     #[inline]
-    fn reset(&mut self) {
-        *self = Entry::default();
-    }
+    fn reset_ext(&mut self) {}
 }
 
 impl EntryMarker for Entry {
@@ -771,8 +769,8 @@ impl private::Sealed for Entry128 {}
 
 impl private::SqeReset for Entry128 {
     #[inline]
-    fn reset(&mut self) {
-        *self = Entry128(Entry::default(), [0; 64]);
+    fn reset_ext(&mut self) {
+        self.1 = [0; 64];
     }
 }
 

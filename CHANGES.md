@@ -38,6 +38,12 @@
   ring, `SubmissionQueue::push128()` at the last slot needs a padding slot plus
   two slots and failed permanently
 
+* Opcode builders build the entry in a local copy and write it to the
+  submission queue with one 8-byte store per word when the builder is dropped,
+  instead of zeroing the entry and then overwriting its fields. A `Recv` with
+  user data takes about 1.2 ns instead of 3.1 ns. A builder passed to
+  `mem::forget` leaves the first 64 bytes of the entry unchanged
+
 ## [1.1.0] - 2026-10-19
 
 * opcode setters for `cmd`, `optval`, `addr3` and `pi_attr`, and `Probe`, no
