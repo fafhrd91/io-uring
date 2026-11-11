@@ -2377,6 +2377,11 @@ mod tests {
     use super::*;
     use crate::types::{Fd, Fixed};
 
+    /// STATEMENT: A `Fixed` target sets `FIXED_FILE`, while a raw `Fd` does not.
+    ///
+    /// HOW:
+    /// - Build a `Recv` with `Fixed(3)` and with `Fd(5)`.
+    /// - Check the opcode, fd and SQE flags of each.
     #[test]
     fn fixed_fd_sets_sqe_flag() {
         let mut entry = Entry::default();
@@ -2391,6 +2396,12 @@ mod tests {
         assert_eq!(entry.0.flags, 0);
     }
 
+    /// STATEMENT: `Fadvise` and `Madvise` move lengths over 32 bits out of `len` into the 64-bit
+    /// field.
+    ///
+    /// HOW:
+    /// - Build each with a 4096-byte and a `1 << 33` length.
+    /// - Check `len`, `addr` and `off` hold the expected values in both cases.
     #[test]
     fn advise_len() {
         let mut entry = Entry::default();
@@ -2416,6 +2427,11 @@ mod tests {
         assert_eq!(unsafe { entry.0.__bindgen_anon_1.off }, 1 << 33);
     }
 
+    /// STATEMENT: Common SQE setters write user data, accumulated flags and personality.
+    ///
+    /// HOW:
+    /// - Build a `Nop` with user data, two `sqe_flags` calls and a personality.
+    /// - Check opcode, default fd `-1`, user data, combined flags and personality.
     #[test]
     fn common_setters() {
         let mut entry = Entry::default();
@@ -2431,6 +2447,11 @@ mod tests {
         assert_eq!(entry.0.personality, 3);
     }
 
+    /// STATEMENT: An opcode constructor resets an entry reused from a previous operation.
+    ///
+    /// HOW:
+    /// - Configure a `Recv` with several setters, then build a `Write` in the same entry.
+    /// - Compare its bytes with a fresh `Write`, and repeat with `UringCmd80` on an `Entry128`.
     #[test]
     fn new_resets_entry() {
         let mut entry = Entry::default();
@@ -2461,6 +2482,12 @@ mod tests {
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<T>()) }.to_vec()
     }
 
+    /// STATEMENT: `Recv::buffer_select` sets the buffer group and `BUFFER_SELECT` and keeps other
+    /// fields.
+    ///
+    /// HOW:
+    /// - Build a fixed-fd `Recv` with `buffer_select(7)` and `ioprio`.
+    /// - Check `len`, null `addr`, `buf_group`, combined flags and `ioprio`.
     #[test]
     fn recv_buffer_select() {
         let mut entry = Entry::default();
@@ -2477,6 +2504,11 @@ mod tests {
         assert_eq!(entry.0.ioprio, sys::IORING_RECVSEND_POLL_FIRST as u16);
     }
 
+    /// STATEMENT: `SendMsg` and `SendMsgZc` store the message header with a length of one.
+    ///
+    /// HOW:
+    /// - Build both with the same `msghdr` pointer, the zero-copy one with an `ioprio`.
+    /// - Check opcode, fd, `len`, `addr` and `ioprio`.
     #[test]
     fn sendmsg_sets_msg() {
         let hdr = std::mem::MaybeUninit::<libc::msghdr>::zeroed();
@@ -2497,6 +2529,11 @@ mod tests {
         assert_eq!(entry.0.ioprio, sys::IORING_SEND_ZC_REPORT_USAGE as u16);
     }
 
+    /// STATEMENT: `SendZc` combines the fixed-buffer bit with flags from `zc_flags` in `ioprio`.
+    ///
+    /// HOW:
+    /// - Build a `SendZc` with `buf_index(Some(2))` and `POLL_FIRST`.
+    /// - Check `buf_index` and that `ioprio` holds both bits.
     #[test]
     fn send_zc_ioprio_bits_combine() {
         let mut entry = Entry::default();
@@ -2510,6 +2547,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Splice::flags` keeps `SPLICE_F_FD_IN_FIXED` set for a fixed input fd.
+    ///
+    /// HOW:
+    /// - Build a `Splice` from `Fixed(1)` and then set `SPLICE_F_MOVE`.
+    /// - Check `splice_fd_in` and that both flags are set.
     #[test]
     fn splice_fixed_fd_in_keeps_flag() {
         let mut entry = Entry::default();
@@ -2521,6 +2563,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `ReadMulti` with a fixed fd keeps `FIXED_FILE` next to `BUFFER_SELECT`.
+    ///
+    /// HOW:
+    /// - Build a `ReadMulti` from `Fixed(1)` and check both SQE flags are set.
     #[test]
     fn read_multi_fixed_fd_keeps_flag() {
         let mut entry = Entry::default();
@@ -2531,6 +2577,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `TimeoutUpdate::flags` keeps the update flag set.
+    ///
+    /// HOW:
+    /// - Build a `TimeoutUpdate` and set `TimeoutFlags::ABS`.
+    /// - Check `timeout_flags` holds `ABS` and `IORING_TIMEOUT_UPDATE`.
     #[test]
     fn timeout_update_keeps_update_flag() {
         let ts = types::Timespec::new();
@@ -2542,6 +2593,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Close` of a fixed slot uses a 1-based `file_index` and no fd or flags.
+    ///
+    /// HOW:
+    /// - Build a `Close` for `Fixed(4)`.
+    /// - Check fd 0, no SQE flags and `file_index` 5.
     #[test]
     fn close_fixed() {
         let mut entry = Entry::default();
@@ -2551,6 +2607,11 @@ mod tests {
         assert_eq!(unsafe { entry.0.__bindgen_anon_5.file_index }, 5);
     }
 
+    /// STATEMENT: `UringCmd80::cmd` splits 80 bytes between the SQE and the 128-byte tail.
+    ///
+    /// HOW:
+    /// - Set a command of bytes `0..80` and user data on a `UringCmd80`.
+    /// - Check opcode, user data, the first 16 bytes in the SQE and the other 64 in the tail.
     #[test]
     fn uring_cmd80_splits_cmd() {
         let mut cmd = [0u8; 80];
@@ -2565,6 +2626,10 @@ mod tests {
         assert_eq!(entry.1[..], cmd[16..]);
     }
 
+    /// STATEMENT: 64-byte opcodes can be built in an `Entry128`.
+    ///
+    /// HOW:
+    /// - Build a `Nop` with user data in an `Entry128` and check opcode and user data.
     #[test]
     fn entry128_accepts_ops() {
         let mut entry = Entry128::from(Entry::default());
@@ -2573,6 +2638,13 @@ mod tests {
         assert_eq!(entry.get_user_data(), 9);
     }
 
+    /// STATEMENT: `Nop` setters set their `nop_flags`, and a new `Nop` clears flags it does not
+    /// use.
+    ///
+    /// HOW:
+    /// - Build a `Nop` with every option, using a fixed file.
+    /// - Check `len`, fd, SQE flags, `buf_index`, CQE32 values and all `nop_flags`.
+    /// - Rebuild it with a raw `Fd` and check only `IORING_NOP_FILE` remains.
     #[test]
     fn nop_flags() {
         let mut entry = Entry::default();
@@ -2607,6 +2679,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `PollAdd::level` and `multi` set and clear their bits in `len`.
+    ///
+    /// HOW:
+    /// - Enable both and check both bits.
+    /// - Enable both, disable `multi`, and check only the level bit remains.
     #[test]
     fn poll_add_flags() {
         let mut entry = Entry::default();
@@ -2624,6 +2701,13 @@ mod tests {
         assert_eq!(entry.0.len, sys::IORING_POLL_ADD_LEVEL);
     }
 
+    /// STATEMENT: `nanos` stores the timeout inline and adds `IMMEDIATE_ARG` to the other flags.
+    ///
+    /// HOW:
+    /// - Set `nanos` on `Timeout`, `LinkTimeout` and `TimeoutUpdate`, with extra flags where
+    ///   supported.
+    /// - Check the value field, the target user data for the update, and the combined
+    ///   `timeout_flags`.
     #[test]
     fn timeout_nanos() {
         let mut entry = Entry::default();
@@ -2656,6 +2740,12 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Send and receive setters encode vectorized, fixed-buffer and bundle options.
+    ///
+    /// HOW:
+    /// - Build `Send` with `vectorized` and with `buf_index`, and `Recv` with `buf_index`.
+    /// - Build `RecvMultiBundle` with `ioprio`, `len` and `total_len`.
+    /// - Check `ioprio`, `buf_index`, `len`, `optlen` and `buf_group`.
     #[test]
     fn send_recv_flags() {
         let mut entry = Entry::default();
@@ -2685,6 +2775,11 @@ mod tests {
         assert_eq!(unsafe { entry.0.__bindgen_anon_4.buf_group }, 5);
     }
 
+    /// STATEMENT: `AcceptMulti` stores the address pointers and keeps the multishot bit.
+    ///
+    /// HOW:
+    /// - Build an `AcceptMulti` with `addr` and `POLL_FIRST`.
+    /// - Check `addr`, `addr2` and that `ioprio` holds both bits.
     #[test]
     fn accept_multi_addr() {
         let mut entry = Entry::default();
@@ -2701,6 +2796,11 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `Read::pi_attr` stores the attribute pointer and the PI type mask.
+    ///
+    /// HOW:
+    /// - Set a PI attribute pointer on a `Read`.
+    /// - Check `attr_ptr` and `attr_type_mask` in the SQE.
     #[test]
     fn rw_pi_attr() {
         let mut entry = Entry::default();
@@ -2712,6 +2812,11 @@ mod tests {
         assert_eq!(pi.attr_type_mask, sys::IORING_RW_ATTR_FLAG_PI as u64);
     }
 
+    /// STATEMENT: `AsyncCancel2` encodes fd, opcode, user data and flags from a `CancelBuilder`.
+    ///
+    /// HOW:
+    /// - Build a cancel for a fixed fd, a `Read` opcode, user data and `all()`.
+    /// - Check fd, `len`, `addr` and all cancel flags.
     #[test]
     fn async_cancel_opcode() {
         let mut entry = Entry::default();
@@ -2733,6 +2838,10 @@ mod tests {
         );
     }
 
+    /// STATEMENT: `MsgRingData` with a fixed target ring sets `FIXED_FILE`.
+    ///
+    /// HOW:
+    /// - Build a `MsgRingData` for `Fixed(2)` and check fd and SQE flags.
     #[test]
     fn msg_ring_fixed_fd() {
         let mut entry = Entry::default();
@@ -2741,6 +2850,11 @@ mod tests {
         assert_eq!(entry.0.flags, Flags::FIXED_FILE.bits());
     }
 
+    /// STATEMENT: 64-byte opcodes built in an `Entry128` clear its tail.
+    ///
+    /// HOW:
+    /// - Fill the tail with `0xff`, build a `Nop`, then a `UringCmd16`.
+    /// - Check the opcode and a zeroed tail after each.
     #[test]
     fn entry64_ops_reset_entry128_tail() {
         let mut entry = Entry128(Entry::default(), [0xff; 64]);
@@ -2754,6 +2868,12 @@ mod tests {
         assert_eq!(entry.1, [0; 64]);
     }
 
+    /// STATEMENT: 128-byte opcodes reset the tail before writing their own data.
+    ///
+    /// HOW:
+    /// - Fill the tail with `0xff` and build a `Nop128`, and check the tail is zeroed.
+    /// - Refill it and build a `UringCmd128` with only the last command byte set.
+    /// - Check opcode, fd, flags, `cmd_op`, and that only the last tail byte is set.
     #[test]
     fn entry128_ops_reset_tail() {
         let mut entry = Entry128(Entry::default(), [0xff; 64]);

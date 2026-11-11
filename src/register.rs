@@ -138,6 +138,11 @@ impl Restriction {
 /// Skipping an fd will not touch the file associated with the previous fd at that index.
 pub const SKIP_FILE: RawFd = sys::IORING_REGISTER_FILES_SKIP;
 
+/// STATEMENT: `Probe` has the size and alignment of a kernel probe followed by 256 op entries.
+///
+/// HOW:
+/// - Compare the size and alignment of a new `Probe` with the `io_uring_probe` layout plus 256
+///   `io_uring_probe_op`.
 #[test]
 fn test_probe_layout() {
     use std::alloc::Layout;
@@ -155,6 +160,12 @@ fn test_probe_layout() {
     );
 }
 
+/// STATEMENT: `Probe::is_supported` and `Debug` report only supported ops up to `last_op`.
+///
+/// HOW:
+/// - Check an empty probe supports nothing and formats as `{}`.
+/// - Mark ops 0, 2 and 3 supported with `last_op = 2`.
+/// - Confirm only 0 and 2 are reported, by `is_supported` and by `Debug`.
 #[test]
 fn test_probe_supported() {
     let mut probe = Probe::new();

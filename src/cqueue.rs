@@ -97,12 +97,21 @@ pub struct Entry(pub(crate) sys::io_uring_cqe);
 #[derive(Clone)]
 pub struct Entry32(pub(crate) Entry, pub(crate) [u64; 2]);
 
+/// STATEMENT: `Entry` and `Entry32` match the kernel CQE sizes.
+///
+/// HOW:
+/// - Compare `size_of` of both entry types with 16 and 32 bytes.
 #[test]
 fn test_entry_sizes() {
     assert_eq!(mem::size_of::<Entry>(), 16);
     assert_eq!(mem::size_of::<Entry32>(), 32);
 }
 
+/// STATEMENT: `EntryMarker` user data accessors read and replace the value on both CQE sizes.
+///
+/// HOW:
+/// - Build an `Entry` and an `Entry32` with user data.
+/// - Replace it through the generic `EntryMarker` API and check the previous and new values.
 #[test]
 fn test_user_data() {
     fn cqe(user_data: u64) -> Entry {
