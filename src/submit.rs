@@ -277,6 +277,11 @@ impl<'a> Submitter<'a> {
     ///
     /// Available since Linux 5.13.
     ///
+    /// Returns the number of buffers updated. When `tags` is given, at most `tags.len()` buffers
+    /// are updated. The kernel updates buffers in order and stops at the first one that fails: it
+    /// returns that error if no buffer was updated, otherwise the count of buffers updated before
+    /// the failure, so a count lower than requested means the update was partial.
+    ///
     /// # Safety
     ///
     /// Developers must ensure that the `iov_base` and `iov_len` values are valid and will
@@ -287,7 +292,7 @@ impl<'a> Submitter<'a> {
         offset: u32,
         bufs: &[libc::iovec],
         tags: Option<&[u64]>,
-    ) -> io::Result<()> {
+    ) -> io::Result<usize> {
         let nr = tags
             .as_ref()
             .map_or(bufs.len(), |tags| bufs.len().min(tags.len()));
@@ -300,12 +305,12 @@ impl<'a> Submitter<'a> {
             ..Default::default()
         };
 
-        self.execute_register(
+        let ret = self.execute_register(
             sys::IORING_REGISTER_BUFFERS_UPDATE,
             cast_ptr::<sys::io_uring_rsrc_update2>(&rr).cast(),
             std::mem::size_of::<sys::io_uring_rsrc_update2>() as _,
-        )
-        .map(drop)
+        )?;
+        Ok(ret as _)
     }
 
     /// Variant of [`register_buffers`](Self::register_buffers)
@@ -579,6 +584,11 @@ impl<'a> Submitter<'a> {
     /// an operation not on the allowlist will fail with `-EACCES`.
     ///
     /// This can only be called once, to prevent untrusted code from removing restrictions.
+    ///
+    /// When the ring fd is registered with [`register_ring_fd`](Self::register_ring_fd), allow
+    /// `IORING_UNREGISTER_RING_FDS` with [`Restriction::register_op`], otherwise the registered
+    /// fd is not released when the [`IoUring`](crate::IoUring) instance is dropped and stays
+    /// in use until the thread exits.
     pub fn register_restrictions(&self, res: &mut [Restriction]) -> io::Result<()> {
         self.execute_register(
             sys::IORING_REGISTER_RESTRICTIONS,
@@ -641,6 +651,13 @@ impl<'a> Submitter<'a> {
     /// and [`IoUring::split`](crate::IoUring::split). Calling this while a ring fd is already
     /// registered returns an `EEXIST` error. The ring fd is unregistered when the
     /// [`IoUring`](crate::IoUring) instance is dropped.
+    ///
+    /// If [`register_restrictions`](Self::register_restrictions) does not allow
+    /// `IORING_UNREGISTER_RING_FDS`, the unregistration on drop fails with `EACCES` and the
+    /// error is ignored. The registered fd then keeps the ring alive and occupies one of the
+    /// thread's registered ring slots, of which there are 16, until the thread exits. Call
+    /// [`unregister_ring_fd`](Self::unregister_ring_fd) before dropping the ring to observe
+    /// the error.
     ///
     /// On kernels with `IORING_FEAT_REG_REG_RING`, registration methods also use the registered
     /// ring fd internally.
@@ -916,5 +933,43 @@ mod tests {
     #[test]
     fn submitter_size() {
         assert_eq!(mem::size_of::<Submitter<'_>>(), 2 * mem::size_of::<usize>());
+    }
+
+    /// STATEMENT: `register_buffers_update` reports how many buffers the kernel updated, and an
+    /// error when the first buffer fails.
+    ///
+    /// HOW:
+    /// - Register a sparse table of two buffers.
+    /// - Update it with a valid 16-byte buffer followed by a 1 GiB + 4 KiB buffer, which exceeds
+    ///   the kernel's 1 GiB limit, and check the result is `Ok(1)`.
+    /// - Update slot 1 with the oversized buffer alone and check it returns `EFAULT`.
+    #[test]
+    fn register_buffers_update_reports_partial_count() {
+        let ring = crate::IoUring::new(4).unwrap();
+        let submitter = ring.submitter();
+        match submitter.register_buffers_sparse(2) {
+            Ok(()) => {}
+            // the kernel does not support sparse buffer tables
+            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => return,
+            Err(e) => panic!("{e}"),
+        }
+
+        let mut small = [0u8; 16];
+        let iovecs = [
+            libc::iovec {
+                iov_base: small.as_mut_ptr().cast(),
+                iov_len: small.len(),
+            },
+            libc::iovec {
+                iov_base: small.as_mut_ptr().cast(),
+                iov_len: (1 << 30) + 4096,
+            },
+        ];
+        assert_eq!(
+            unsafe { submitter.register_buffers_update(0, &iovecs, None) }.unwrap(),
+            1
+        );
+        let err = unsafe { submitter.register_buffers_update(1, &iovecs[1..], None) }.unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::EFAULT));
     }
 }

@@ -497,14 +497,29 @@ impl<E: EntryMarker> SubmissionQueue<'_, E> {
     }
 }
 
+/// User data of the padding [`Nop`](crate::opcode::Nop) that
+/// [`push128`](SubmissionQueue::push128) inserts before a 128-byte entry at the end of the ring.
+///
+/// The padding posts a completion only when it is cancelled as part of a failed
+/// [`IO_LINK`](Flags::IO_LINK) chain.
+pub const PADDING_USER_DATA: u64 = u64::MAX;
+
 impl SubmissionQueue<'_, Entry> {
     /// Attempts to push a 128-byte entry into a mixed queue, initializing it in place with `f`.
     ///
     /// The ring must be built with [`setup_sqe_mixed`](crate::Builder::setup_sqe_mixed).
     /// The entry occupies two consecutive slots. If only the last slot of the ring is left before
-    /// it wraps, it is filled with a [`Nop`](crate::opcode::Nop) that posts no completion on
-    /// success and continues a link chain of the previous entry, so up to three slots are used.
+    /// it wraps, it is filled with a [`Nop`](crate::opcode::Nop) with user data
+    /// [`PADDING_USER_DATA`] that posts no completion on success, so up to three slots are used.
     /// If the queue does not have room, `f` is returned in a [`PushError`] without being called.
+    ///
+    /// Like liburing, the padding has no link flags, so an [`IO_LINK`](Flags::IO_LINK) or
+    /// [`IO_HARDLINK`](Flags::IO_HARDLINK) chain of the previous entry ends at the padding and
+    /// does not extend to the 128-byte entry, which then runs regardless of the chain's outcome.
+    /// When an entry of that chain fails, the padding is cancelled and posts a completion with
+    /// user data [`PADDING_USER_DATA`] and result `-ECANCELED`, in addition to the completions
+    /// of the pushed entries. Ignore completions with this user data, and do not use it for
+    /// other entries.
     ///
     /// # Safety
     ///
@@ -541,15 +556,9 @@ impl SubmissionQueue<'_, Entry> {
 
         let mut tail = self.queue.local_tail.get();
         if pad {
-            let link = if self.is_empty() {
-                Flags::empty()
-            } else {
-                let prev = &*self.queue.sqes.add((tail.wrapping_sub(1) & mask) as usize);
-                prev.get_flags() & (Flags::IO_LINK | Flags::IO_HARDLINK)
-            };
             let entry = &mut *self.queue.sqes.add((tail & mask) as usize);
-            crate::opcode::Nop::new(entry);
-            entry.set_flags(Flags::SKIP_SUCCESS | link);
+            crate::opcode::Nop::new(entry).user_data(PADDING_USER_DATA);
+            entry.set_flags(Flags::SKIP_SUCCESS);
             tail = tail.wrapping_add(1);
             self.queue.local_tail.set(tail);
         }
@@ -883,6 +892,71 @@ mod push_tests {
                 opcode::Nop128::new(e);
             });
         }
+    }
+
+    /// STATEMENT: An `IO_LINK` chain ends at the padding entry: the padding is cancelled with
+    /// `PADDING_USER_DATA` and the 128-byte entry still runs.
+    ///
+    /// HOW:
+    /// - On a 4-entry mixed ring, submit two `Nop`s so the tail reaches the last slot.
+    /// - Push a `Nop` that injects `-EIO` with `IO_LINK`, then a `Nop128`, which needs padding.
+    /// - Check the three completions, in any order: the failed `Nop`, the cancelled padding with
+    ///   `PADDING_USER_DATA`, and the successful `Nop128`.
+    #[test]
+    fn push128_padding_cancelled_in_link() {
+        use crate::squeue::{self, Flags, PADDING_USER_DATA};
+
+        let mut ring = match IoUring::<squeue::Entry>::builder()
+            .setup_sqe_mixed()
+            .build(4)
+        {
+            Ok(ring) => ring,
+            // the kernel does not support `IORING_SETUP_SQE_MIXED`
+            Err(e) if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::EOPNOTSUPP)) => return,
+            Err(e) => panic!("{e}"),
+        };
+        unsafe {
+            let sq = ring.submission();
+            for i in 0..2 {
+                sq.push(|e| {
+                    opcode::Nop::new(e).user_data(10 + i);
+                })
+                .unwrap();
+            }
+        }
+        ring.submit_and_wait(2).unwrap();
+        assert_eq!(ring.completion().count(), 2);
+
+        unsafe {
+            let sq = ring.submission();
+            sq.push(|e| {
+                opcode::Nop::new(e)
+                    .inject_result(-libc::EIO)
+                    .user_data(1)
+                    .sqe_flags(Flags::IO_LINK);
+            })
+            .unwrap();
+            sq.push128(|e| {
+                opcode::Nop128::new(e).user_data(2);
+            })
+            .unwrap();
+            assert_eq!(sq.len(), 4);
+        }
+        ring.submit_and_wait(3).unwrap();
+        let mut cqes: Vec<_> = ring
+            .completion()
+            .map(|e| (e.user_data(), e.result()))
+            .collect();
+        // the kernel may post the cancellation after the `Nop128` completion
+        cqes.sort_unstable();
+        assert_eq!(
+            cqes,
+            [
+                (1, -libc::EIO),
+                (2, 0),
+                (PADDING_USER_DATA, -libc::ECANCELED)
+            ]
+        );
     }
 
     /// STATEMENT: An unsynced queue reports full, is published by submit, and accepts the rejected

@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [1.2.0] - 2026-11-11
 
 * `Submitter::submit*()` refresh the cached submission queue head after
   `io_uring_enter`, so `SubmissionQueue::len()` and `is_full()` reflect
@@ -9,6 +9,34 @@
 * `SubmitArgs::sigmask()` passes the kernel signal set size, `_NSIG / 8`,
   instead of `size_of::<libc::sigset_t>()`, which the kernel rejected with
   `EINVAL`
+
+* `SubmissionQueue::push128()` sets the user data of the padding `Nop` to the
+  new `squeue::PADDING_USER_DATA` (`u64::MAX`) instead of `0`. The padding
+  posts a `-ECANCELED` completion with this user data when an earlier entry of
+  its `IO_LINK` chain fails
+
+* `SubmissionQueue::push128()` no longer copies `IO_LINK`/`IO_HARDLINK` from
+  the previous slot to the padding `Nop`, matching liburing. When the previous
+  entry was a 128-byte entry, that slot held its payload, so the flags were
+  read from arbitrary bytes and a link chain could be dropped. A chain of the
+  previous entry now ends at the padding, and the 128-byte entry runs
+  independently
+
+* `IoUring::from_fd()` is available for all entry types and returns
+  `InvalidInput`, without closing the fd, if the `SQE128`, `CQE32`,
+  `SQE_MIXED` or `CQE_MIXED` setup flags do not match the entry types. It
+  previously read `SQE128` and `CQE32` rings at the wrong entry stride. Calls
+  that relied on the default entry types may need a type annotation
+
+* `Submitter::register_buffers_update()` returns `io::Result<usize>`, the
+  number of buffers updated, like `register_files_update()`. The kernel stops
+  at the first buffer that fails and returns the count updated so far, which
+  was discarded, so partial updates reported success
+
+* `Builder::build()` and `IoUring::from_fd()` return `InvalidInput` for an
+  `SQE_MIXED` ring with fewer than 4 submission queue entries. On a 2-entry
+  ring, `SubmissionQueue::push128()` at the last slot needs a padding slot plus
+  two slots and failed permanently
 
 ## [1.1.0] - 2026-10-19
 
