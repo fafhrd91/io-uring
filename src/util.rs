@@ -7,10 +7,11 @@ pub(crate) mod private {
     /// See this [blog](https://jack.wrenn.fyi/blog/private-trait-methods/) for more details.
     pub trait Sealed {}
 
-    /// Resets every byte of a submission queue entry, including the second half of 128-byte
-    /// entries.
+    /// Resets the second half of 128-byte submission queue entries.
     pub trait SqeReset {
-        fn reset(&mut self);
+        /// Zero the bytes past the first 64 of the entry, the first 64 are written by the
+        /// opcode builder.
+        fn reset_ext(&mut self);
     }
 }
 

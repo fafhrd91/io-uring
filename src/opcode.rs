@@ -6,6 +6,10 @@
 //! `new` resets every field of the entry, so an entry can be reused for another operation.
 //! Fields set before `new` are cleared, set them with the operation's setters instead.
 //!
+//! The operation is built in a local copy, which is written to the entry when the operation
+//! is dropped, usually at the end of the statement. An operation passed to
+//! [`std::mem::forget`] leaves the first 64 bytes of the entry unchanged.
+//!
 //! ```
 //! use ntex_io_uring::{opcode, squeue::Entry, types};
 //! use std::ffi::CString;
@@ -18,9 +22,9 @@
 //!     .user_data(0x42);
 //! ```
 #![allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
-use std::{convert::TryInto, mem, os::unix::io::RawFd};
+use std::{convert::TryInto, mem, ops, os::unix::io::RawFd};
 
-use crate::squeue::{Entry, Entry128, EntryMarker, Flags};
+use crate::squeue::{Entry128, EntryMarker, Flags};
 use crate::{sys, types, types::sealed};
 
 macro_rules! assign_fd {
@@ -40,14 +44,14 @@ macro_rules! opcode_common {
         /// Set the user data. This is an application-supplied value that will be passed
         /// straight through into the [completion queue entry](crate::cqueue::Entry::user_data).
         #[inline]
-        pub fn user_data(self, user_data: u64) -> Self {
+        pub fn user_data(mut self, user_data: u64) -> Self {
             self.sqe.user_data = user_data;
             self
         }
 
         /// Set the submission event's [flags](Flags), they are ORed with already set flags.
         #[inline]
-        pub fn sqe_flags(self, flags: Flags) -> Self {
+        pub fn sqe_flags(mut self, flags: Flags) -> Self {
             self.sqe.flags |= flags.bits();
             self
         }
@@ -55,7 +59,7 @@ macro_rules! opcode_common {
         /// Set the personality of this event. You can obtain a personality using
         /// [`Submitter::register_personality`](crate::Submitter::register_personality).
         #[inline]
-        pub fn personality(self, personality: u16) -> Self {
+        pub fn personality(mut self, personality: u16) -> Self {
             self.sqe.personality = personality;
             self
         }
@@ -80,16 +84,68 @@ unsafe fn sqe_anon6<T>(sqe: &mut sys::io_uring_sqe) -> &mut T {
     unsafe { &mut *(&raw mut sqe.__bindgen_anon_6).cast::<T>() }
 }
 
-#[inline(always)]
-fn reset_entry(entry: &mut impl EntryMarker) -> &mut sys::io_uring_sqe {
-    entry.reset();
-    &mut entry.as_mut().0
+/// A submission queue entry under construction.
+///
+/// Fields are written to a zeroed local copy, which is stored to the entry once on drop.
+/// Zeroing the entry in place and then overwriting some of its fields costs two stores for
+/// those fields, building it locally lets the compiler emit one store per field.
+struct Sqe<'a> {
+    dst: &'a mut sys::io_uring_sqe,
+    sqe: sys::io_uring_sqe,
+}
+
+impl<'a> Sqe<'a> {
+    #[inline(always)]
+    fn new(dst: &'a mut sys::io_uring_sqe) -> Self {
+        Self {
+            dst,
+            sqe: unsafe { mem::zeroed() },
+        }
+    }
+}
+
+impl ops::Deref for Sqe<'_> {
+    type Target = sys::io_uring_sqe;
+
+    #[inline(always)]
+    fn deref(&self) -> &sys::io_uring_sqe {
+        &self.sqe
+    }
+}
+
+impl ops::DerefMut for Sqe<'_> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut sys::io_uring_sqe {
+        &mut self.sqe
+    }
+}
+
+impl Drop for Sqe<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // Unrolled 8-byte copies make LLVM merge the narrow fields into 8-byte stores, a
+        // `memcpy` or a loop lets it split the copy per field.
+        const _: () = assert!(mem::size_of::<sys::io_uring_sqe>() == mem::size_of::<[u64; 8]>());
+        const _: () = assert!(mem::align_of::<sys::io_uring_sqe>() >= mem::align_of::<u64>());
+        let src = (&raw const self.sqe).cast::<u64>();
+        let dst = (&raw mut *self.dst).cast::<u64>();
+        macro_rules! copy_words {
+            ($($i:literal)*) => { $(unsafe { dst.add($i).write(src.add($i).read()) };)* };
+        }
+        copy_words!(0 1 2 3 4 5 6 7);
+    }
 }
 
 #[inline(always)]
-fn reset_entry128(entry: &mut Entry128) -> &mut sys::io_uring_sqe {
-    *entry = Entry128(Entry::default(), [0; 64]);
-    &mut entry.0.0
+fn reset_entry(entry: &mut impl EntryMarker) -> Sqe<'_> {
+    entry.reset_ext();
+    Sqe::new(&mut entry.as_mut().0)
+}
+
+#[inline(always)]
+fn reset_entry128(entry: &mut Entry128) -> Sqe<'_> {
+    entry.1 = [0; 64];
+    Sqe::new(&mut entry.0.0)
 }
 
 macro_rules! opcode {
@@ -122,7 +178,7 @@ macro_rules! opcode {
     ) => {
         $( #[$outer] )*
         pub struct $name<'a> {
-            sqe: &'a mut sys::io_uring_sqe,
+            sqe: Sqe<'a>,
         }
 
         impl<'a> $name<'a> {
@@ -138,16 +194,19 @@ macro_rules! opcode {
             $( #[$new_meta] )*
             #[inline]
             pub fn new(entry: &'a mut $( $ety )+ $(, $arg: $aty )*) -> Self {
-                let $sqe = $reset(entry);
-                $sqe.opcode = Self::CODE;
-                $new_body
-                Self { sqe: $sqe }
+                let mut sqe = $reset(entry);
+                {
+                    let $sqe = &mut *sqe;
+                    $sqe.opcode = Self::CODE;
+                    $new_body
+                }
+                Self { sqe }
             }
 
             $(
                 $( #[$set_meta] )*
                 #[inline]
-                pub fn $setter(self $(, $sarg: $saty )*) -> Self {
+                pub fn $setter(mut self $(, $sarg: $saty )*) -> Self {
                     {
                         let $s = &mut *self.sqe;
                         $set_body
@@ -1646,7 +1705,7 @@ macro_rules! uring_cmd80 {
     ( $( #[$outer:meta] )* pub struct $name:ident = $code:expr; ) => {
         $( #[$outer] )*
         pub struct $name<'a> {
-            sqe: &'a mut sys::io_uring_sqe,
+            sqe: Sqe<'a>,
             cmd2: &'a mut [u8; 64],
         }
 
@@ -1664,9 +1723,9 @@ macro_rules! uring_cmd80 {
             /// All fields of `entry` are reset first, see the [module docs](self).
             #[inline]
             pub fn new(entry: &'a mut Entry128, fd: impl sealed::UseFixed, cmd_op: u32) -> Self {
-                *entry = Entry128(Entry::default(), [0; 64]);
                 let Entry128(entry, cmd2) = entry;
-                let sqe = &mut entry.0;
+                *cmd2 = [0; 64];
+                let mut sqe = Sqe::new(&mut entry.0);
                 sqe.opcode = Self::CODE;
                 assign_fd!(sqe, fd);
                 sqe.__bindgen_anon_1.__bindgen_anon_1.cmd_op = cmd_op;
@@ -1676,7 +1735,7 @@ macro_rules! uring_cmd80 {
             /// The `buf_index` is an index into an array of fixed buffers,
             /// and is only valid if fixed buffers were registered.
             #[inline]
-            pub fn buf_index(self, buf_index: Option<u16>) -> Self {
+            pub fn buf_index(mut self, buf_index: Option<u16>) -> Self {
                 if let Some(buf_index) = buf_index {
                     self.sqe.__bindgen_anon_4.buf_index = buf_index;
                     unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= sys::IORING_URING_CMD_FIXED };
@@ -1686,16 +1745,16 @@ macro_rules! uring_cmd80 {
 
             /// Arbitrary command data.
             #[inline]
-            pub fn cmd(self, cmd: [u8; 80]) -> Self {
+            pub fn cmd(mut self, cmd: [u8; 80]) -> Self {
                 let cmd1: [u8; 16] = cmd[..16].try_into().unwrap();
-                unsafe { *sqe_anon6::<[u8; 16]>(self.sqe) = cmd1 };
+                unsafe { *sqe_anon6::<[u8; 16]>(&mut self.sqe) = cmd1 };
                 self.cmd2.copy_from_slice(&cmd[16..]);
                 self
             }
 
             /// `IORING_URING_CMD_*` flags, ORed with already set flags, see [`UringCmd16::flags`].
             #[inline]
-            pub fn flags(self, flags: u32) -> Self {
+            pub fn flags(mut self, flags: u32) -> Self {
                 unsafe { self.sqe.__bindgen_anon_3.uring_cmd_flags |= flags };
                 self
             }
@@ -1705,7 +1764,7 @@ macro_rules! uring_cmd80 {
             /// For example, the [ublk](https://docs.kernel.org/block/ublk.html#usage-requirements)
             /// needs to set `addr` to some special value.
             #[inline]
-            pub fn addr(self, addr: Option<u64>) -> Self {
+            pub fn addr(mut self, addr: Option<u64>) -> Self {
                 if let Some(addr) = addr {
                     self.sqe.__bindgen_anon_2.addr = addr;
                 }
@@ -2375,6 +2434,7 @@ opcode! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::squeue::Entry;
     use crate::types::{Fd, Fixed};
 
     /// STATEMENT: A `Fixed` target sets `FIXED_FILE`, while a raw `Fd` does not.
