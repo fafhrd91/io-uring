@@ -57,14 +57,25 @@ impl<'a> Submitter<'a> {
 
     /// Publish entries pushed to the submission queue, so they are visible to the kernel, and
     /// return the number of entries the kernel has not consumed yet.
+    ///
+    /// The loaded head is cached, see [`refresh_head`](Self::refresh_head).
     #[inline]
     fn flush_sq(&self) -> usize {
         let tail = self.sq.local_tail.get();
         unsafe {
             crate::squeue::publish_tail(self.sq.tail, tail);
             let head = (*self.sq.head).load(atomic::Ordering::Acquire);
+            self.sq.local_head.set(head);
             tail.wrapping_sub(head) as usize
         }
+    }
+
+    /// Cache the submission queue head, so `SubmissionQueue::len()` and `is_full()` see the
+    /// space freed by the kernel without a separate sync.
+    #[inline]
+    fn refresh_head(&self) {
+        let head = unsafe { (*self.sq.head).load(atomic::Ordering::Acquire) };
+        self.sq.local_head.set(head);
     }
 
     /// Whether the kernel thread has gone to sleep because it waited for too long without
@@ -152,9 +163,14 @@ impl<'a> Submitter<'a> {
     /// completion events to complete.
     pub fn submit_and_wait(&self, want: usize) -> io::Result<usize> {
         match self.prepare_submit(want, EnterFlags::empty()) {
-            (len, Some(flags)) => unsafe {
-                self.enter::<libc::sigset_t>(len as _, want as _, flags.bits(), None)
-            },
+            (len, Some(flags)) => {
+                let res = unsafe {
+                    self.enter::<libc::sigset_t>(len as _, want as _, flags.bits(), None)
+                };
+                // the kernel consumes entries during the enter, even if it fails
+                self.refresh_head();
+                res
+            }
             (len, None) => Ok(len),
         }
     }
@@ -170,9 +186,11 @@ impl<'a> Submitter<'a> {
         args: &types::SubmitArgs<'_, '_>,
     ) -> io::Result<usize> {
         match self.prepare_submit(want, EnterFlags::EXT_ARG) {
-            (len, Some(flags)) => unsafe {
-                self.enter(len as _, want as _, flags.bits(), Some(args))
-            },
+            (len, Some(flags)) => {
+                let res = unsafe { self.enter(len as _, want as _, flags.bits(), Some(args)) };
+                self.refresh_head();
+                res
+            }
             (len, None) => Ok(len),
         }
     }
