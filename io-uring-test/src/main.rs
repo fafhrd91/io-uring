@@ -142,6 +142,7 @@ fn test<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     tests::timeout::test_timeout_cancel(&mut ring, &test)?;
     tests::timeout::test_timeout_abs(&mut ring, &test)?;
     tests::timeout::test_timeout_submit_args(&mut ring, &test)?;
+    tests::timeout::test_timeout_submit_args_abs(&mut ring, &test)?;
     tests::timeout::test_timeout_submit_args_min_wait(&mut ring, &test)?;
     tests::timeout::test_timeout_multishot(&mut ring, &test)?;
 
@@ -162,6 +163,7 @@ fn test<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     tests::net::test_tcp_buffer_select(&mut ring, &test)?;
     tests::net::test_tcp_buffer_select_recvmsg(&mut ring, &test)?;
     tests::net::test_tcp_buffer_select_readv(&mut ring, &test)?;
+    tests::net::test_tcp_buffer_select_send(&mut ring, &test)?;
     tests::net::test_tcp_recv_multi(&mut ring, &test)?;
     tests::net::test_tcp_recv_bundle(&mut ring, &test)?;
     tests::net::test_tcp_recv_multi_bundle(&mut ring, &test)?;

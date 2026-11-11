@@ -1158,6 +1158,72 @@ pub fn test_tcp_buffer_select_readv<S: squeue::EntryMarker, C: cqueue::EntryMark
     Ok(())
 }
 
+/// STATEMENT: `Send::buffer_select` sends from a provided buffer instead of `buf`.
+///
+/// HOW:
+/// - Register a one-entry buffer ring holding a text and submit a `Send` with a null `buf`.
+/// - Check the completion's result and buffer id, and that the peer reads the text.
+pub fn test_tcp_buffer_select_send<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
+    ring: &mut IoUring<S, C>,
+    test: &Test,
+) -> anyhow::Result<()> {
+    require!(
+        test;
+        test.probe.is_supported(opcode::Send::CODE);
+        ring.params().is_feature_recvsend_bundle(); // requires 6.10
+    );
+
+    println!("test tcp_buffer_select_send");
+
+    let (send_stream, mut recv_stream) = tcp_pair()?;
+    let send_fd = types::Fd(send_stream.as_raw_fd());
+    let text = b"The quick brown fox jumps over the lazy dog.";
+    let mut output = vec![0; text.len()];
+
+    let buf_ring = register_buf_ring::Builder::new(0xdead)
+        .ring_entries(1)
+        .buf_cnt(1)
+        .buf_len(text.len())
+        .build()?;
+    buf_ring.rc.register(ring)?;
+    let ptr = buf_ring.rc.ring_start.as_ptr_mut() as *mut BufRingEntry;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            text.as_ptr(),
+            ptr.as_mut().unwrap().addr() as *mut u8,
+            text.len(),
+        );
+    }
+
+    unsafe {
+        ring.submission()
+            .push(|entry| {
+                opcode::Send::new(entry, send_fd, std::ptr::null(), text.len() as _)
+                    .buffer_select(0xdead)
+                    .user_data(0x01);
+            })
+            .expect("queue is full");
+    }
+
+    ring.submit_and_wait(1)?;
+
+    let cqe: cqueue::Entry = ring.completion().next().expect("cqueue is empty").into();
+    assert_eq!(cqe.user_data(), 0x01);
+    assert_eq!(cqe.result(), text.len() as i32);
+    assert_eq!(cqueue::buffer_select(cqe.flags()), Some(0));
+
+    assert_eq!(
+        recv_stream
+            .read(&mut output)
+            .expect("could not read stream"),
+        text.len()
+    );
+    assert_eq!(&output, text);
+    buf_ring.rc.unregister(ring)?;
+
+    Ok(())
+}
+
 pub fn test_tcp_recv_multi<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
     ring: &mut IoUring<S, C>,
     test: &Test,
@@ -1572,6 +1638,53 @@ pub fn test_socket<S: squeue::EntryMarker, C: cqueue::EntryMarker>(
         };
         assert_eq!(ret, 0);
         assert_eq!(optval, 1);
+
+        // Read it back with `GetSockOpt`.
+        optval = 0;
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::GetSockOpt::new(
+                        entry,
+                        ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+                        libc::SOL_SOCKET as u32,
+                        libc::SO_REUSEADDR as u32,
+                        &mut optval as *mut _ as *mut libc::c_void,
+                        std::mem::size_of_val(&optval) as libc::socklen_t,
+                    )
+                    .user_data(1235);
+                })
+                .expect("queue is full");
+        }
+        ring.submit_and_wait(1)?;
+        let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
+        assert_eq!(cqes.len(), 1);
+        assert_eq!(cqes[0].user_data(), 1235);
+        // The result is the value's length.
+        assert_eq!(cqes[0].result(), std::mem::size_of_val(&optval) as i32);
+        assert_eq!(optval, 1);
+
+        // Levels other than SOL_SOCKET aren't supported.
+        unsafe {
+            ring.submission()
+                .push(|entry| {
+                    ntex_io_uring::opcode::GetSockOpt::new(
+                        entry,
+                        ntex_io_uring::types::Fd(io_uring_socket.as_raw_fd()),
+                        libc::IPPROTO_IP as u32,
+                        libc::IP_TTL as u32,
+                        &mut optval as *mut _ as *mut libc::c_void,
+                        std::mem::size_of_val(&optval) as libc::socklen_t,
+                    )
+                    .user_data(1236);
+                })
+                .expect("queue is full");
+        }
+        ring.submit_and_wait(1)?;
+        let cqes: Vec<cqueue::Entry> = ring.completion().map(Into::into).collect();
+        assert_eq!(cqes.len(), 1);
+        assert_eq!(cqes[0].user_data(), 1236);
+        assert_eq!(cqes[0].result(), -libc::EOPNOTSUPP);
     }
 
     // Close both sockets, to avoid leaking FDs.
