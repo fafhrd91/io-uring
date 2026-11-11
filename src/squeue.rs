@@ -877,9 +877,8 @@ mod push_tests {
                 .into_inner();
             assert!(sq.is_full());
 
-            // submission publishes the tail of the unsynced queue
+            // submission publishes the tail of the unsynced queue and refreshes its head
             assert_eq!(ring.submitter().submit_and_wait(2).unwrap(), 2);
-            // the stale head is synchronized by the push
             assert!(sq.push(f).is_ok());
             assert_eq!(sq.len(), 1);
             assert_eq!(ring.submitter().submit_and_wait(3).unwrap(), 1);
@@ -889,5 +888,33 @@ mod push_tests {
             let data: Vec<_> = cq.map(|e| e.user_data()).collect();
             assert_eq!(data, [0, 0, 7]);
         }
+    }
+
+    /// STATEMENT: A submit refreshes the cached head, so a queue drained by the kernel is no
+    /// longer reported full.
+    ///
+    /// HOW:
+    /// - Fill an unsynced queue with `Nop`s and confirm `is_full()`.
+    /// - Call `submit()`, which consumes every entry, without pushing or syncing.
+    /// - Confirm `is_empty()` and `!is_full()` on the same queue handle.
+    #[test]
+    fn submit_refreshes_head() {
+        let ring = IoUring::new(4).unwrap();
+        let sq = ring.submission_unsynced();
+        unsafe {
+            for _ in 0..sq.capacity() {
+                assert!(
+                    sq.push(|e| {
+                        opcode::Nop::new(e);
+                    })
+                    .is_ok()
+                );
+            }
+        }
+        assert!(sq.is_full());
+
+        assert_eq!(ring.submitter().submit().unwrap(), sq.capacity());
+        assert!(sq.is_empty());
+        assert!(!sq.is_full());
     }
 }

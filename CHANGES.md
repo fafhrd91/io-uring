@@ -1,5 +1,11 @@
 # Changes
 
+## [Unreleased]
+
+* `Submitter::submit*()` refresh the cached submission queue head after
+  `io_uring_enter`, so `SubmissionQueue::len()` and `is_full()` reflect
+  entries consumed by the kernel without a separate `sync()`
+
 ## [1.1.0] - 2026-10-19
 
 * opcode setters for `cmd`, `optval`, `addr3` and `pi_attr`, and `Probe`, no
