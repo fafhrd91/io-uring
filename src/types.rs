@@ -267,6 +267,23 @@ impl From<std::time::Duration> for Timespec {
     }
 }
 
+/// Size of the kernel signal set, `_NSIG / 8`. The kernel rejects any other size, while
+/// `libc::sigset_t` is larger on glibc.
+#[cfg(any(
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6"
+))]
+const KERNEL_SIGSET_SIZE: u32 = 16;
+#[cfg(not(any(
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6"
+)))]
+const KERNEL_SIGSET_SIZE: u32 = 8;
+
 /// Submit arguments
 ///
 /// Note that arguments that exceed their lifetime will fail to compile.
@@ -318,7 +335,8 @@ impl<'prev, 'now> SubmitArgs<'prev, 'now> {
     /// Masked signals will be restored after submit operation returns
     pub fn sigmask<'new>(mut self, sigmask: &'new libc::sigset_t) -> SubmitArgs<'now, 'new> {
         self.args.sigmask = cast_ptr(sigmask) as _;
-        self.args.sigmask_sz = std::mem::size_of::<libc::sigset_t>() as _;
+        // `libc::sigset_t` starts with the kernel signal set
+        self.args.sigmask_sz = KERNEL_SIGSET_SIZE;
 
         SubmitArgs {
             args: self.args,
@@ -918,6 +936,23 @@ mod tests {
 
         assert_eq!(timespec.0.tv_sec as u64, duration.as_secs());
         assert_eq!(timespec.0.tv_nsec as u32, duration.subsec_nanos());
+    }
+
+    /// STATEMENT: A wait with a signal mask passes the kernel signal set size and is accepted.
+    ///
+    /// HOW:
+    /// - Wait for one completion on an empty ring with an empty signal mask and a 1 ms timeout.
+    /// - Confirm the wait times out with `ETIME` instead of failing with `EINVAL`.
+    #[test]
+    fn submit_with_sigmask() {
+        let ring = crate::IoUring::new(4).unwrap();
+        let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::sigemptyset(&mut mask) };
+        let ts = Timespec::new().nsec(1_000_000);
+        let args = SubmitArgs::new().sigmask(&mask).timespec(&ts);
+
+        let err = ring.submitter().submit_with_args(1, &args).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ETIME));
     }
 
     #[test]
