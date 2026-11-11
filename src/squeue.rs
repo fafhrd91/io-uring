@@ -118,12 +118,21 @@ pub struct Entry(pub(crate) sys::io_uring_sqe);
 #[derive(Clone)]
 pub struct Entry128(pub(crate) Entry, pub(crate) [u8; 64]);
 
+/// STATEMENT: `Entry` and `Entry128` match the kernel SQE sizes.
+///
+/// HOW:
+/// - Compare `size_of` of both entry types with 64 and 128 bytes.
 #[test]
 fn test_entry_sizes() {
     assert_eq!(mem::size_of::<Entry>(), 64);
     assert_eq!(mem::size_of::<Entry128>(), 128);
 }
 
+/// STATEMENT: `EntryMarker` user data accessors read and replace the value on both entry sizes.
+///
+/// HOW:
+/// - Build a `Nop` with user data on an `Entry` and an `Entry128`.
+/// - Replace it through the generic `EntryMarker` API and check the previous and new values.
 #[test]
 fn test_user_data() {
     fn replace<E: EntryMarker>(entry: &mut E, user_data: u64) -> u64 {
@@ -143,6 +152,11 @@ fn test_user_data() {
     assert_eq!(entry.get_user_data(), 4);
 }
 
+/// STATEMENT: SQE flag and personality setters accumulate flags and `clear_flags` resets them.
+///
+/// HOW:
+/// - Set two flags and a personality on an `Entry`, and one flag on an `Entry128`.
+/// - Check the combined flags and personality, then that `clear_flags` leaves no flags.
 #[test]
 fn test_entry_setters() {
     let mut entry = Entry::default();
@@ -807,6 +821,11 @@ impl<E: EntryMarker> Debug for SubmissionQueue<'_, E> {
 mod tests {
     use crate::{IoUring, opcode};
 
+    /// STATEMENT: Pushing from inside a `push` closure panics in debug builds.
+    ///
+    /// HOW:
+    /// - Call `push` on the same queue from within the closure of an outer `push`.
+    /// - Expect the reentrancy panic message.
     #[test]
     #[should_panic(expected = "push from within a `push` closure")]
     fn push_reentrant_push_panics() {
@@ -822,6 +841,11 @@ mod tests {
         }
     }
 
+    /// STATEMENT: A panic inside a `push` closure does not leave the queue marked as pushing.
+    ///
+    /// HOW:
+    /// - Catch a panic raised by a `push` closure.
+    /// - Push again and confirm it succeeds instead of reporting reentrancy.
     #[test]
     fn push_guard_reset_after_panic() {
         let ring = IoUring::new(4).unwrap();
@@ -845,6 +869,11 @@ mod tests {
 mod push_tests {
     use crate::{IoUring, opcode};
 
+    /// STATEMENT: `push128` is rejected on a ring that was not set up for mixed SQE sizes.
+    ///
+    /// HOW:
+    /// - Call `push128` with a `Nop128` on a default ring.
+    /// - Expect the panic that names `setup_sqe_mixed`.
     #[test]
     #[should_panic(expected = "push128 requires a ring set up with `setup_sqe_mixed`")]
     fn push128_requires_mixed() {
@@ -856,6 +885,15 @@ mod push_tests {
         }
     }
 
+    /// STATEMENT: An unsynced queue reports full, is published by submit, and accepts the rejected
+    /// entry after it.
+    ///
+    /// HOW:
+    /// - Fill a 2-entry unsynced queue, then confirm a third push returns its closure and
+    ///   `is_full()`.
+    /// - Submit, which publishes the tail and refreshes the head, then push the returned closure.
+    /// - Check `len()`, the submit counts, and that the completions arrive in push order
+    ///   `[0, 0, 7]`.
     #[test]
     fn push_unsynced() {
         let ring = IoUring::new(2).unwrap();

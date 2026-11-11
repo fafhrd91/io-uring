@@ -929,6 +929,10 @@ mod tests {
 
     use super::*;
 
+    /// STATEMENT: Converting a `Duration` into a `Timespec` keeps seconds and nanoseconds.
+    ///
+    /// HOW:
+    /// - Convert `Duration::new(2, 500)` and compare `tv_sec` and `tv_nsec` with the source.
     #[test]
     fn timespec_from_duration_converts_correctly() {
         let duration = Duration::new(2, 500);
@@ -955,6 +959,12 @@ mod tests {
         assert_eq!(err.raw_os_error(), Some(libc::ETIME));
     }
 
+    /// STATEMENT: `CancelBuilder` constructors and `all()` set the matching cancel flags and
+    /// targets.
+    ///
+    /// HOW:
+    /// - Build cancel requests with `any`, `user_data`, `fd(Fd)` and `fd(Fixed)`.
+    /// - Check the flags, user data and fd target of each, before and after `all()`.
     #[test]
     fn test_cancel_builder_flags() {
         let cb = CancelBuilder::any();
@@ -985,6 +995,13 @@ mod tests {
         );
     }
 
+    /// STATEMENT: Combined `CancelBuilder` match criteria translate into the kernel flags, fd and
+    /// opcode.
+    ///
+    /// HOW:
+    /// - Combine opcode, user data, fd and `all()` matches in several builders.
+    /// - Check `to_flags()`, `to_fd()` and `opcode`, including that a later `match_fd` replaces a
+    ///   fixed fd.
     #[test]
     fn test_cancel_builder_combined() {
         let cb = CancelBuilder::user_data(42);

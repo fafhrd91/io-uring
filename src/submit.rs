@@ -909,6 +909,10 @@ impl<'a> Submitter<'a> {
 mod tests {
     use super::*;
 
+    /// STATEMENT: `Submitter` stays two pointers wide.
+    ///
+    /// HOW:
+    /// - Compare `size_of::<Submitter>()` with two `usize`.
     #[test]
     fn submitter_size() {
         assert_eq!(mem::size_of::<Submitter<'_>>(), 2 * mem::size_of::<usize>());
